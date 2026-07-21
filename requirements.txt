@@ -1,0 +1,7 @@
+torch
+torch-geometric
+rdflib
+pandas
+mlxtend
+numpy
+

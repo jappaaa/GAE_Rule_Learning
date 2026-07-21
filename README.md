@@ -1,2 +1,2 @@
 # GAE_Rule_Learning
-Learning semantic association rules from a knowledge graph and sensor data leveraging a Graph Autoencoder
+Learning semantic association rules from IoT data. The IoT data can be categorized into dynamic and static data. The dynamic data is the data that changes frequently during the operation of the cyber-physical system (CPS), e.g., sensor data. The static data is data that originates from the CPS that does not change (or very rarely) during the operation of the CPS, e.g., structural CPS data. This project aims to learn rules from the combination of dynamic and static CPS data using using a Graph Autoencoder (GAE) to fully leverage the graph stucture of the static CPS data.
