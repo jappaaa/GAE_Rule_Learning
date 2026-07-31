@@ -46,6 +46,13 @@ class LeakDBLoader:
             for n in scenario_wn.junction_name_list
         }
 
+        reservoirs = {
+            n: {
+                "head": scenario_wn.get_node(n).base_head,
+            }
+            for n in scenario_wn.reservoir_name_list
+        }
+
         pipes = {
             name: {
                 "length": scenario_wn.get_link(name).length,
@@ -55,7 +62,7 @@ class LeakDBLoader:
             for name in scenario_wn.pipe_name_list
         }
 
-        return {"junctions": junctions, "pipes": pipes}
+        return {"junctions": junctions, "reservoirs": reservoirs, "pipes": pipes}
 
 
     def load_attributes_as_df(self, scenarios: list[int]) -> dict[str, pd.DataFrame]:
