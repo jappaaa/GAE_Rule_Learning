@@ -28,7 +28,9 @@ class Config:
     # Model
     hidden_channels: int = 64
     latent_channels: int = 32
-    encoder_type: str = "gcn"  # "gcn" or "gat"
+    encoder_type: str = "sage"  # "sage" or "gat"
+    num_layers: int = 2         # use 4 for bidirectional experiments
+    aggr: str = "sum"           # how to combine messages from different edge types
 
     # Training
     lr: float = 1e-3
