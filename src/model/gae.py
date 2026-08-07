@@ -1,4 +1,3 @@
-import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.nn import to_hetero
@@ -58,13 +57,7 @@ class GraphAutoEncoder(nn.Module):
         z_value  = z_dict['value_node']
         logits = {}
         for st in self.gb.SENSOR_TYPES:
-            sensor_indices = torch.tensor(
-                [idx for (stype, _), idx in self.gb.sensor_idx.items() if stype == st],
-                device=z_sensor.device,
-            )
-            value_indices = torch.tensor(
-                [idx for (vtype, _), idx in self.gb.value_node_idx.items() if vtype == st],
-                device=z_sensor.device,
-            )
+            sensor_indices = self.gb.sensor_indices_by_type[st].to(z_sensor.device)
+            value_indices = self.gb.value_indices_by_type[st].to(z_value.device)
             logits[st] = self.decoder(z_sensor[sensor_indices], z_value[value_indices])
         return logits
