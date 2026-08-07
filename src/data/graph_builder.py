@@ -70,6 +70,15 @@ class GraphBuilder:
         self.n_sensors = len(self.sensor_idx)
         self.n_value_nodes = len(self.value_node_idx)
 
+        self.sensor_indices_by_type = {
+            st: torch.tensor([idx for (stype, _), idx in self.sensor_idx.items() if stype == st])
+            for st in self.SENSOR_TYPES
+        }
+        self.value_indices_by_type = {
+            st: torch.tensor([idx for (vtype, _), idx in self.value_node_idx.items() if vtype == st])
+            for st in self.SENSOR_TYPES
+        }
+
     def _build_static_edges(self):
         """Build edge indices for connected and has_sensor edges.
 
