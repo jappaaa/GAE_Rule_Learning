@@ -13,12 +13,15 @@ class Config:
         self.raw_data_dir = os.path.join(self.data_dir, "raw")
         self.processed_data_dir = os.path.join(self.data_dir, "processed")
 
+    # Device — set to "cpu" or "cuda" to override auto-detection
+    device: str = None
+
     # Reproducibility
     random_seed: int = 42
 
     # Dataset
-    scenarios: list = field(default_factory=lambda: list(range(1, 11)))
-    n_bins: int = 3
+    scenarios: list = field(default_factory=lambda: list(range(1, 3)))
+    n_bins: int = 4
     train_ratio: float = 0.7
     val_ratio: float = 0.15  # test_ratio = 1 - train_ratio - val_ratio
 
@@ -33,12 +36,16 @@ class Config:
     aggr: str = "sum"           # how to combine messages from different edge types
 
     # Training
+    train_model: bool = False
+    checkpoint_path: str = 'checkpoints/best_model.pt'
     lr: float = 1e-3
     epochs: int = 100
     patience: int = 10
     batch_size: int = 32
 
     # Rule extraction
-    reconstruction_threshold: float = 0.5
+    antecedent_threshold: float = 0.9
+    consequent_threshold: float = 0.9
+    max_antecedent_size: int = 2
     min_support: float = 0.1
     min_confidence: float = 0.5
