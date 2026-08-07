@@ -37,6 +37,10 @@ class LeakDBDataset(Dataset):
         self.val_indices = meta['val_indices']
         self.test_indices = meta['test_indices']
         self.n_bins_per_type = meta['n_bins_per_type']
+        self.base_graphs = {
+            s: torch.load(os.path.join(self.processed_dir, f'base_{s}.pt'), weights_only=False)
+            for s in self.config.scenarios
+        }
 
     @property
     def raw_file_names(self):
@@ -44,7 +48,7 @@ class LeakDBDataset(Dataset):
 
     @property
     def processed_file_names(self):
-        return ['metadata.pt']  # sentinel — if missing, process() runs
+        return ['metadata.pt'] + [f'base_{s}.pt' for s in self.config.scenarios]
 
     def process(self):
         # Load each scenario once and cache for use across all steps
@@ -106,6 +110,8 @@ class LeakDBDataset(Dataset):
             sd = sensor_cache[scenario]
             attrs = self.loader.load_attributes(scenario)
             base = gb.build_base(attrs)
+
+            torch.save(base, os.path.join(self.processed_dir, f'base_{scenario}.pt'))
 
             pressures_disc = disc_p.transform(sd['pressures'])
             flows_disc     = disc_f.transform(sd['flows'])
