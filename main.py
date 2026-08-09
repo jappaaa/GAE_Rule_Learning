@@ -16,30 +16,38 @@ def main():
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
 
+    print("Loading dataset...")
     dataset = LeakDBDataset(config)
+    print(f"Dataset ready — {len(dataset)} graphs | {len(dataset.train_indices)} train / {len(dataset.val_indices)} val / {len(dataset.test_indices)} test")
 
+    print("Building graph builder...")
     gb = GraphBuilder(
         dataset.topology,
         dataset.n_bins_per_type,
         bidirectional=config.bidirectional_has_measure,
     )
 
-    # metadata (node types + edge types) required by to_hetero(); derived from any graph
+    print("Initialising model...")
     sample = dataset[0]
     model = GraphAutoEncoder(config, sample.metadata(), gb)
     model.to(device)
+    print(f"Model ready — {sum(p.numel() for p in model.parameters())} parameters")
 
     if config.train_model:
+        print("Starting training...")
         trainer = Trainer(model, dataset, config, device)
         trainer.train()
+        print("Training complete")
     else:
+        print(f"Loading checkpoint from {config.checkpoint_path}...")
         checkpoint = torch.load(config.checkpoint_path, weights_only=False)
         model.load_state_dict(checkpoint['model_state_dict'])
-        print(f"Loaded checkpoint from epoch {checkpoint['epoch']} (val_loss={checkpoint['val_loss']:.4f})")
+        print(f"Checkpoint loaded — epoch {checkpoint['epoch']}, val_loss={checkpoint['val_loss']:.4f}")
 
+    print("Extracting rules...")
     extractor = RuleExtractor(model, gb, dataset, config, device)
     rules = extractor.extract()
-    print(f"Extracted {len(rules)} candidate rules")
+    print(f"Extraction complete — {len(rules)} candidate rules")
     for rule in rules[:5]:
         print(f"  {rule['antecedent']} -> {rule['consequent']}")
 
