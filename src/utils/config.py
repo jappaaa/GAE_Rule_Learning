@@ -42,6 +42,9 @@ class Config:
     epochs: int = 100
     patience: int = 10
     batch_size: int = 32
+    use_masking: bool = False
+    mask_ratio: float = 0.3
+    masking_strategy: str = 'remove'  # 'remove' or 'all_bins'
 
     # Rule extraction
     antecedent_threshold: float = 0.9
