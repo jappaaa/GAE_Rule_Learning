@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import torch
+from tqdm import tqdm
 import torch.nn.functional as F
 from torch_geometric.loader import DataLoader
 from torch.utils.data import SubsetRandomSampler
@@ -32,6 +33,7 @@ class Trainer:
         )
 
         Path("checkpoints").mkdir(parents=True, exist_ok=True)
+        
 
     def train(self) -> dict:
         """Run training loop with early stopping. Returns loss history."""
@@ -40,8 +42,8 @@ class Trainer:
         history = {'train': [], 'val': []}
 
         for epoch in range(1, self.config.epochs + 1):
-            train_loss = self._train_epoch()
-            val_loss = self._validate()
+            train_loss = self._train_epoch(epoch)
+            val_loss = self._validate(epoch)
 
             history['train'].append(train_loss)
             history['val'].append(val_loss)
@@ -58,6 +60,7 @@ class Trainer:
                     break
 
         return history
+    
 
     def _loss(self, z_dict: dict, has_measure_edge_index: torch.Tensor) -> torch.Tensor:
         """Cross-entropy loss over sensor-to-value-node assignments.
@@ -90,13 +93,28 @@ class Trainer:
             total_loss = total_loss + F.cross_entropy(logits_dict[st], true_bins)
 
         return total_loss / len(gb.SENSOR_TYPES)
+    
 
-    def _train_epoch(self) -> float:
+    def _apply_masking(self, data):
+        """Randomly remove has_measure edges for a subset of sensors."""
+        ei = data[('sensor', 'has_measure', 'value_node')].edge_index
+        n_keep = ei.shape[1] - max(1, int(ei.shape[1] * self.config.mask_ratio))
+        keep_indices = torch.randperm(ei.shape[1], device=ei.device)[:n_keep]
+        data[('sensor', 'has_measure', 'value_node')].edge_index = ei[:, keep_indices]
+        if self.model.gb.bidirectional:
+            data[('value_node', 'measured_by', 'sensor')].edge_index = ei[:, keep_indices].flip(0)
+        return data
+    
+
+    def _train_epoch(self, epoch: int) -> float:
         self.model.train()
         total_loss = 0.0
 
-        for data in self.train_loader:
+        progress = tqdm(self.train_loader, desc=f" train epoch {epoch}", colour="green", leave=False)
+        for data in progress:
             data = data.to(self.device)
+            if self.config.use_masking:
+                data = self._apply_masking(data)
             self.optimizer.zero_grad()
             z_dict = self.model.encode(data.x_dict, data.edge_index_dict)
             has_measure_ei = data[('sensor', 'has_measure', 'value_node')].edge_index
@@ -104,22 +122,27 @@ class Trainer:
             loss.backward()
             self.optimizer.step()
             total_loss += loss.item()
+            progress.set_postfix(loss=f"{loss.item():.4f}")
 
         return total_loss / len(self.train_loader)
+    
 
-    def _validate(self) -> float:
+    def _validate(self, epoch: int) -> float:
         self.model.eval()
         total_loss = 0.0
 
         with torch.no_grad():
-            for data in self.val_loader:
+            progress = tqdm(self.val_loader, desc=f"  val epoch {epoch}", colour="blue", leave=False)
+            for data in progress:
                 data = data.to(self.device)
                 z_dict = self.model.encode(data.x_dict, data.edge_index_dict)
                 has_measure_ei = data[('sensor', 'has_measure', 'value_node')].edge_index
                 loss = self._loss(z_dict, has_measure_ei)
                 total_loss += loss.item()
+                progress.set_postfix(loss=f"{loss.item():.4f}")
 
         return total_loss / len(self.val_loader)
+    
 
     def _save_checkpoint(self, epoch: int, val_loss: float):
         torch.save({
@@ -128,6 +151,7 @@ class Trainer:
             'model_state_dict': self.model.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
         }, 'checkpoints/best_model.pt')
+
 
     def load_checkpoint(self, path: str):
         checkpoint = torch.load(path, weights_only=False)
