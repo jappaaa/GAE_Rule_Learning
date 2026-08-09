@@ -31,7 +31,7 @@ def main():
     sample = dataset[0]
     model = GraphAutoEncoder(config, sample.metadata(), gb)
     model.to(device)
-    print(f"Model ready — {sum(p.numel() for p in model.parameters())} parameters")
+    print("Model ready")
 
     if config.train_model:
         print("Starting training...")
