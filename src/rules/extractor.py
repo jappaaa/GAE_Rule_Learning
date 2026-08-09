@@ -2,6 +2,7 @@ import random
 from itertools import combinations
 
 import torch
+from tqdm import tqdm
 
 from src.data.dataset import LeakDBDataset
 from src.data.graph_builder import GraphBuilder
@@ -36,8 +37,9 @@ class RuleExtractor:
         Each rule is a dict with 'antecedent' and 'consequent' keys.
         Support and confidence are left to the evaluator.
         """
+        antecedents = self._get_all_antecedents()
         rules = []
-        for antecedent in self._get_all_antecedents():
+        for antecedent in tqdm(antecedents, desc=f"Querying all antecedent combinations of at most {self.config.max_antecedent_size} items"):
             consequents = self._query_model(antecedent)
             for consequent in consequents:
                 rules.append({'antecedent': list(antecedent), 'consequent': consequent})
