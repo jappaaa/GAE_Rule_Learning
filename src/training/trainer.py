@@ -96,7 +96,10 @@ class Trainer:
     
 
     def _apply_masking(self, data):
-        """Randomly remove has_measure edges for a subset of sensors."""
+        """Randomly remove has_measure edges for a subset of sensors during training. 
+        The loss is computed over the original graphs (without masking), forcing the model to learn underlying
+        associations because it has to reconstruct these edges from other nodes in the graph.
+        """
         ei = data[('sensor', 'has_measure', 'value_node')].edge_index
         n_keep = ei.shape[1] - max(1, int(ei.shape[1] * self.config.mask_ratio))
         keep_indices = torch.randperm(ei.shape[1], device=ei.device)[:n_keep]
@@ -113,11 +116,11 @@ class Trainer:
         progress = tqdm(self.train_loader, desc=f" train epoch {epoch}", colour="green", leave=False)
         for data in progress:
             data = data.to(self.device)
+            has_measure_ei = data[('sensor', 'has_measure', 'value_node')].edge_index
             if self.config.use_masking:
                 data = self._apply_masking(data)
             self.optimizer.zero_grad()
             z_dict = self.model.encode(data.x_dict, data.edge_index_dict)
-            has_measure_ei = data[('sensor', 'has_measure', 'value_node')].edge_index
             loss = self._loss(z_dict, has_measure_ei)
             loss.backward()
             self.optimizer.step()
