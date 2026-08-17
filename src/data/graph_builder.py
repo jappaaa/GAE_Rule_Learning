@@ -9,7 +9,8 @@ class GraphBuilder:
     Node types: junction, reservoir, pipe, sensor, value_node
     Static edges: (junction/reservoir, connected, pipe) bidirectional
                   (junction/reservoir/pipe, has_sensor, sensor)
-    Dynamic edges: (sensor, has_measure, value_node) — one per timestamp
+    Dynamic edges: (value_node, measured_by, sensor) — one per timestamp;
+                   optionally also (sensor, has_measure, value_node) if bidirectional=True
     """
 
     SENSOR_TYPES = ['pressure', 'flow', 'demand']
@@ -206,16 +207,16 @@ class GraphBuilder:
         return data
 
     def build(self, base: HeteroData, pressures_row: pd.Series, flows_row: pd.Series, demands_row: pd.Series) -> HeteroData:
-        """Clone the scenario base graph and attach dynamic has_measure edges for one timestamp."""
+        """Clone the scenario base graph and attach dynamic measured_by edges for one timestamp."""
         data = base.clone()
-        ei = self._build_has_measure_edges(pressures_row, flows_row, demands_row)
-        data[('sensor', 'has_measure', 'value_node')].edge_index = ei
+        ei = self._build_measured_by_edges(pressures_row, flows_row, demands_row)
+        data[('value_node', 'measured_by', 'sensor')].edge_index = ei
         if self.bidirectional:
-            data[('value_node', 'measured_by', 'sensor')].edge_index = ei.flip(0)
+            data[('sensor', 'has_measure', 'value_node')].edge_index = ei.flip(0)
         return data
 
-    def _build_has_measure_edges(self, pressures_row: pd.Series, flows_row: pd.Series, demands_row: pd.Series) -> torch.Tensor:
-        """Return edge_index [2, n_edges] connecting each sensor node to its current value node.
+    def _build_measured_by_edges(self, pressures_row: pd.Series, flows_row: pd.Series, demands_row: pd.Series) -> torch.Tensor:
+        """Return edge_index [2, n_edges] connecting each value node to its sensor (value_node → sensor).
         Sensors with NaN readings are skipped."""
         src, dst = [], []
 
@@ -230,7 +231,7 @@ class GraphBuilder:
                     continue
                 s = self.sensor_idx[(st, col)]
                 v = self.value_node_idx[(st, int(bin_idx))]
-                src.append(s)
-                dst.append(v)
+                src.append(v)
+                dst.append(s)
 
         return torch.tensor([src, dst], dtype=torch.long)
