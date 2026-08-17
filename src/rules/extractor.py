@@ -51,10 +51,10 @@ class RuleExtractor:
         items = self._get_all_items()
         antecedents = []
         for size in range(1, self.config.max_antecedent_size + 1):
-            for combo in combinations(items, size):
+            for combo in combinations(items, size):  
                 sensors_seen = set()
                 valid = True
-                for (st, sname, _) in combo:
+                for (st, sname, _) in combo: # check whether there is only one item per sensor (sensors can only be assigned to one bin)
                     if (st, sname) in sensors_seen:
                         valid = False
                         break
@@ -105,13 +105,13 @@ class RuleExtractor:
 
         src, dst = [], []
         for (st, sname, bin_idx) in antecedent:
-            src.append(self.gb.sensor_idx[(st, sname)])
-            dst.append(self.gb.value_node_idx[(st, bin_idx)])
+            src.append(self.gb.value_node_idx[(st, bin_idx)])
+            dst.append(self.gb.sensor_idx[(st, sname)])
 
         ei = torch.tensor([src, dst], dtype=torch.long, device=self.device)
-        graph[('sensor', 'has_measure', 'value_node')].edge_index = ei
+        graph[('value_node', 'measured_by', 'sensor')].edge_index = ei
         if self.gb.bidirectional:
-            graph[('value_node', 'measured_by', 'sensor')].edge_index = ei.flip(0)
+            graph[('sensor', 'has_measure', 'value_node')].edge_index = ei.flip(0)
 
         return graph
 
