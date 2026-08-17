@@ -62,7 +62,7 @@ class Trainer:
         return history
     
 
-    def _loss(self, z_dict: dict, has_measure_edge_index: torch.Tensor) -> torch.Tensor:
+    def _loss(self, z_dict: dict, measured_by_edge_index: torch.Tensor) -> torch.Tensor:
         """Cross-entropy loss over sensor-to-value-node assignments.
 
         For each sensor type, computes cross-entropy between the decoded logits
@@ -72,21 +72,22 @@ class Trainer:
         gb = self.model.gb
         device = z_dict['sensor'].device
 
-        # scatter has_measure edges into a tensor: sensor_idx -> value_node_idx
-        # valid because each sensor has exactly one has_measure edge per timestamp
+        # scatter measured_by edges into a tensor: sensor_idx -> value_node_idx
+        # edge direction is value_node -> sensor, so [0]=value_node, [1]=sensor
+        # valid because each sensor has exactly one measured_by edge per timestamp
         value_of_sensor = torch.empty(gb.n_sensors, dtype=torch.long, device=device)
-        value_of_sensor[has_measure_edge_index[0]] = has_measure_edge_index[1]
+        value_of_sensor[measured_by_edge_index[1]] = measured_by_edge_index[0]
 
         logits_dict = self.model.decode(z_dict)
         total_loss = torch.tensor(0.0, device=device)
 
         for st in gb.SENSOR_TYPES:
             sensor_indices = gb.sensor_indices_by_type[st].to(device)
-            value_indices = gb.value_indices_by_type[st].to(device)
+            bin_offset = gb.value_indices_by_type[st][0].to(device)
 
-            # value_node_idx is built with contiguous offsets per type, so subtracting
-            # the first bin's global index converts to local 0-based bin indices
-            true_bins = value_of_sensor[sensor_indices] - value_indices[0]
+            # value_node indices are contiguous per type, so subtracting the first
+            # bin's global index converts to local 0-based bin indices
+            true_bins = value_of_sensor[sensor_indices] - bin_offset
 
             # cross_entropy applies softmax per row independently, so each sensor gets
             # its own probability distribution over its bins — not one softmax over all sensors
@@ -96,16 +97,19 @@ class Trainer:
     
 
     def _apply_masking(self, data):
-        """Randomly remove has_measure edges for a subset of sensors during training. 
+        """Randomly remove measured_by edges for a subset of sensors during training.
         The loss is computed over the original graphs (without masking), forcing the model to learn underlying
         associations because it has to reconstruct these edges from other nodes in the graph.
         """
-        ei = data[('sensor', 'has_measure', 'value_node')].edge_index
+
+        #TODO: add different masking techniques
+
+        ei = data[('value_node', 'measured_by', 'sensor')].edge_index
         n_keep = ei.shape[1] - max(1, int(ei.shape[1] * self.config.mask_ratio))
         keep_indices = torch.randperm(ei.shape[1], device=ei.device)[:n_keep]
-        data[('sensor', 'has_measure', 'value_node')].edge_index = ei[:, keep_indices]
+        data[('value_node', 'measured_by', 'sensor')].edge_index = ei[:, keep_indices]
         if self.model.gb.bidirectional:
-            data[('value_node', 'measured_by', 'sensor')].edge_index = ei[:, keep_indices].flip(0)
+            data[('sensor', 'has_measure', 'value_node')].edge_index = ei[:, keep_indices].flip(0)
         return data
     
 
@@ -116,12 +120,12 @@ class Trainer:
         progress = tqdm(self.train_loader, desc=f" train epoch {epoch}", colour="green", leave=False)
         for data in progress:
             data = data.to(self.device)
-            has_measure_ei = data[('sensor', 'has_measure', 'value_node')].edge_index
+            measured_by_ei = data[('value_node', 'measured_by', 'sensor')].edge_index
             if self.config.use_masking:
                 data = self._apply_masking(data)
             self.optimizer.zero_grad()
             z_dict = self.model.encode(data.x_dict, data.edge_index_dict)
-            loss = self._loss(z_dict, has_measure_ei)
+            loss = self._loss(z_dict, measured_by_ei)
             loss.backward()
             self.optimizer.step()
             total_loss += loss.item()
@@ -139,8 +143,8 @@ class Trainer:
             for data in progress:
                 data = data.to(self.device)
                 z_dict = self.model.encode(data.x_dict, data.edge_index_dict)
-                has_measure_ei = data[('sensor', 'has_measure', 'value_node')].edge_index
-                loss = self._loss(z_dict, has_measure_ei)
+                measured_by_ei = data[('value_node', 'measured_by', 'sensor')].edge_index
+                loss = self._loss(z_dict, measured_by_ei)
                 total_loss += loss.item()
                 progress.set_postfix(loss=f"{loss.item():.4f}")
 
