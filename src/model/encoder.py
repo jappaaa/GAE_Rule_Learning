@@ -15,7 +15,7 @@ class GNNEncoder(nn.Module):
             if conv_type == 'gat':
                 self.convs.append(GATConv((-1, -1), out, add_self_loops=False)) # can't add self loops to bipartite relations 
             else:
-                self.convs.append(SAGEConv((-1, -1), out)) 
+                self.convs.append(SAGEConv((-1, -1), out)) # SAGE already concatenates central nodes embedding, therefore no self-loops
 
     def forward(self, x, edge_index):
         for i, conv in enumerate(self.convs):
