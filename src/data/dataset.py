@@ -41,6 +41,18 @@ class LeakDBDataset(Dataset):
             s: torch.load(os.path.join(self.processed_dir, f'base_{s}.pt'), weights_only=False)
             for s in self.config.scenarios
         }
+        test_transactions = torch.load(
+            os.path.join(self.processed_dir, 'test_transactions.pt'),
+            weights_only=False,
+        )
+        self.test_tensor = test_transactions['tensor']
+        self.test_items = test_transactions['items']
+
+        self.gb = GraphBuilder(
+            self.topology,
+            self.n_bins_per_type,
+            bidirectional=config.bidirectional_has_measure,
+        )
 
     @property
     def raw_file_names(self):
@@ -48,7 +60,7 @@ class LeakDBDataset(Dataset):
 
     @property
     def processed_file_names(self):
-        return ['metadata.pt'] + [f'base_{s}.pt' for s in self.config.scenarios]
+        return ['metadata.pt', 'test_transactions.pt'] + [f'base_{s}.pt' for s in self.config.scenarios]
 
     def process(self):
         # Load each scenario once and cache for use across all steps
@@ -79,6 +91,11 @@ class LeakDBDataset(Dataset):
             scenario, t, _ = all_pairs[idx]
             train_ts_by_scenario[scenario].append(t)
 
+        test_ts_by_scenario = defaultdict(list)
+        for idx in test_indices:
+            scenario, t, _ = all_pairs[idx]
+            test_ts_by_scenario[scenario].append(t)
+
         pressure_list, flow_list, demand_list = [], [], []
         for scenario, timestamps in train_ts_by_scenario.items():
             sd = sensor_cache[scenario]
@@ -104,7 +121,10 @@ class LeakDBDataset(Dataset):
 
         # --- Step 4: build and save all graphs (scenario by scenario) ---
         # pair_idx_map: (scenario, t) -> position in shuffled all_pairs (= graph filename index)
+        # at the same time we also create a one hot encoded sensor df to evaluate the rules later on.
         pair_idx_map = {(s, t): i for i, (s, t, _) in enumerate(all_pairs)}
+
+        test_chunks = []
 
         for scenario in self.config.scenarios:
             sd = sensor_cache[scenario]
@@ -134,7 +154,34 @@ class LeakDBDataset(Dataset):
                     os.path.join(self.processed_dir, f'graph_{graph_idx}.pt'),
                 )
 
-        # --- Step 5: save metadata ---
+            test_ts = test_ts_by_scenario[scenario]
+            if test_ts:
+                disc_by_type = {
+                    'pressure': pressures_disc,
+                    'flow':     flows_disc,
+                    'demand':   demands_disc,
+                }
+                # A dict where the keys are (st, sname, bin_idx) and the values are boolean arrays indicating which rows have that specific
+                # sensor and bin combination. After this is transformed into a df containing the one hot encoded format of all sensors of all types
+                # of the current scenario
+                chunk = {
+                    (st, sname, bin_idx): (disc_df.iloc[test_ts][sname].values == bin_idx)
+                    for st, disc_df in disc_by_type.items()
+                    for sname in disc_df.columns
+                    for bin_idx in range(n_bins_per_type[st])
+                }
+                test_chunks.append(pd.DataFrame(chunk))
+
+        # --- Step 5: save test transactions in PyTorch tensors allowing vectorized operations during evaluation ---
+        test_df = pd.concat(test_chunks).reset_index(drop=True)
+        items = list(test_df.columns)
+        tensor = torch.tensor(test_df.values, dtype=torch.bool)
+        torch.save(
+            {'tensor': tensor, 'items': items},
+            os.path.join(self.processed_dir, 'test_transactions.pt'),
+        )
+
+        # --- Step 6: save metadata ---
         torch.save(
             {
                 'pairs':         all_pairs,
