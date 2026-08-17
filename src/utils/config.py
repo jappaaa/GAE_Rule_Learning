@@ -20,35 +20,41 @@ class Config:
     random_seed: int = 42
 
     # Dataset
-    scenarios: list = field(default_factory=lambda: list(range(1, 3)))
-    n_bins: int = 4
-    train_ratio: float = 0.7
-    val_ratio: float = 0.15  # test_ratio = 1 - train_ratio - val_ratio
+    scenarios: list = field(default_factory=lambda: list(range(1, 2)))
+    n_bins: int = 10
+    train_ratio: float = 0.8
+    val_ratio: float = 0.1  # test_ratio = 1 - train_ratio - val_ratio
 
     # Graph
     bidirectional_has_measure: bool = False
 
     # Model
-    hidden_channels: int = 64
-    latent_channels: int = 32
+    hidden_channels: int = 32
+    latent_channels: int = 4
     encoder_type: str = "sage"  # "sage" or "gat"
-    num_layers: int = 2         # use 4 for bidirectional experiments
-    aggr: str = "sum"           # how to combine messages from different edge types
+    num_layers: int = 6         # Important as this determines how far message travel through the graph
+    aggr: str = "sum"           # how to combine messages from different edge types in heterogeneous GNN, passed to .to_hetero()
 
     # Training
-    train_model: bool = False
+    train_model: bool = True
     checkpoint_path: str = 'checkpoints/best_model.pt'
     lr: float = 1e-3
-    epochs: int = 100
-    patience: int = 10
-    batch_size: int = 32
-    use_masking: bool = False
-    mask_ratio: float = 0.3
+    epochs: int = 20
+    patience: int = 5
+    batch_size: int = 1
+    use_masking: bool = True
+    mask_ratio: float = 0.80
     masking_strategy: str = 'remove'  # 'remove' or 'all_bins'
 
     # Rule extraction
-    antecedent_threshold: float = 0.9
-    consequent_threshold: float = 0.9
+    learn_rules: bool = True
+    rules_path: str = 'rules/rules.json'
+    antecedent_threshold: float = 0.8
+    consequent_threshold: float = 0.8
     max_antecedent_size: int = 2
+    filter_rules: bool = False
     min_support: float = 0.1
     min_confidence: float = 0.5
+
+    # Results
+    results_dir: str = 'results'
