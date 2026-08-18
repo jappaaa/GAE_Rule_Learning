@@ -2,7 +2,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.nn import to_hetero
 
-from src.model.encoder import GNNEncoder
+from src.model.encoder import GNNEncoder, HeteroGNNEncoder
 from src.model.decoder import InnerProductDecoder
 from src.data.graph_builder import GraphBuilder
 from src.utils.config import Config
@@ -17,13 +17,27 @@ class GraphAutoEncoder(nn.Module):
             graph_builder:  provides sensor/value_node index mappings per sensor type
         """
         super().__init__()
-        encoder = GNNEncoder(
-            config.hidden_channels,
-            config.latent_channels,
-            config.num_layers,
-            config.encoder_type,
-        )
-        self.encoder = to_hetero(encoder, metadata, aggr=config.aggr)
+        if config.bidirectional_has_measure:
+            # value_node receives messages via (sensor, has_measure, value_node) edges,
+            # so to_hetero() can generate update functions for all node types
+            encoder = GNNEncoder(
+                config.hidden_channels,
+                config.latent_channels,
+                config.num_layers,
+                config.encoder_type,
+            )
+            self.encoder = to_hetero(encoder, metadata, aggr=config.aggr)
+        else:
+            # value_node is only a source (measured_by), never a destination;
+            # HeteroGNNEncoder handles this explicitly without to_hetero()'s constraint
+            self.encoder = HeteroGNNEncoder(
+                config.hidden_channels,
+                config.latent_channels,
+                config.num_layers,
+                config.encoder_type,
+                metadata,
+                aggr=config.aggr,
+            )
         self.decoder = InnerProductDecoder()
         self.gb = graph_builder
 
