@@ -69,7 +69,7 @@ class RuleExtractor:
         Returns an empty list if any antecedent item is not reconstructed above
         antecedent_threshold — the model did not confidently recognise the antecedent.
         """
-        graph = self._build_query_graph(antecedent)
+        graph = self.build_query_graph(antecedent)
 
         self.model.eval()
         with torch.no_grad():
@@ -98,7 +98,7 @@ class RuleExtractor:
 
         return consequents
 
-    def _build_query_graph(self, antecedent: list[tuple]):
+    def build_query_graph(self, antecedent: list[tuple]):
         """Clone a random base graph and inject has_measure edges for the antecedent items."""
         scenario = self._rng.choice(list(self.dataset.base_graphs.keys()))
         graph = self.dataset.base_graphs[scenario].clone().to(self.device)
