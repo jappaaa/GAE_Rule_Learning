@@ -8,6 +8,7 @@ from torch.utils.data import SubsetRandomSampler
 
 from src.model.gae import GraphAutoEncoder
 from src.data.dataset import LeakDBDataset
+from src.training.masking import Masker
 from src.utils.config import Config
 
 
@@ -33,6 +34,7 @@ class Trainer:
         )
 
         Path("checkpoints").mkdir(parents=True, exist_ok=True)
+        self.masker = Masker(model.gb, config)
         
 
     def train(self) -> dict:
@@ -96,23 +98,6 @@ class Trainer:
         return total_loss / len(gb.SENSOR_TYPES)
     
 
-    def _apply_masking(self, data):
-        """Randomly remove measured_by edges for a subset of sensors during training.
-        The loss is computed over the original graphs (without masking), forcing the model to learn underlying
-        associations because it has to reconstruct these edges from other nodes in the graph.
-        """
-
-        #TODO: add different masking techniques
-
-        ei = data[('value_node', 'measured_by', 'sensor')].edge_index
-        n_keep = ei.shape[1] - max(1, int(ei.shape[1] * self.config.mask_ratio))
-        keep_indices = torch.randperm(ei.shape[1], device=ei.device)[:n_keep]
-        data[('value_node', 'measured_by', 'sensor')].edge_index = ei[:, keep_indices]
-        if self.model.gb.bidirectional:
-            data[('sensor', 'has_measure', 'value_node')].edge_index = ei[:, keep_indices].flip(0)
-        return data
-    
-
     def _train_epoch(self, epoch: int) -> float:
         self.model.train()
         total_loss = 0.0
@@ -122,7 +107,7 @@ class Trainer:
             data = data.to(self.device)
             measured_by_ei = data[('value_node', 'measured_by', 'sensor')].edge_index
             if self.config.use_masking:
-                data = self._apply_masking(data)
+                data = self.masker.apply(data)
             self.optimizer.zero_grad()
             z_dict = self.model.encode(data.x_dict, data.edge_index_dict)
             loss = self._loss(z_dict, measured_by_ei)
