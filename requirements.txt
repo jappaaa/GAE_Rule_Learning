@@ -4,4 +4,5 @@ pandas
 mlxtend
 numpy
 wntr
+pyvis
 
