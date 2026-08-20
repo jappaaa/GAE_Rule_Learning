@@ -23,13 +23,12 @@ class Trainer:
 
         self.optimizer = torch.optim.Adam(model.parameters(), lr=config.lr)
 
-        # batch_size=1 avoids node index offset handling across graphs in the loss
         self.train_loader = DataLoader(
-            dataset, batch_size=1,
+            dataset, batch_size=config.batch_size,
             sampler=SubsetRandomSampler(dataset.train_indices),
         )
         self.val_loader = DataLoader(
-            dataset, batch_size=1,
+            dataset, batch_size=config.batch_size,
             sampler=SubsetRandomSampler(dataset.val_indices),
         )
 
@@ -70,14 +69,15 @@ class Trainer:
         For each sensor type, computes cross-entropy between the decoded logits
         and the true bin each sensor connects to at this timestamp.
         No negative sampling needed — softmax over all bins provides implicit contrast.
+        Supports batch_size > 1: logits and true_bins are [n_graphs * n_sensors_of_type].
         """
         gb = self.model.gb
         device = z_dict['sensor'].device
+        n_graphs = z_dict['sensor'].shape[0] // gb.n_sensors
 
-        # scatter measured_by edges into a tensor: sensor_idx -> value_node_idx
+        # scatter measured_by edges into a flat lookup: batched_sensor_idx -> batched_value_node_idx
         # edge direction is value_node -> sensor, so [0]=value_node, [1]=sensor
-        # valid because each sensor has exactly one measured_by edge per timestamp
-        value_of_sensor = torch.empty(gb.n_sensors, dtype=torch.long, device=device)
+        value_of_sensor = torch.empty(n_graphs * gb.n_sensors, dtype=torch.long, device=device)
         value_of_sensor[measured_by_edge_index[1]] = measured_by_edge_index[0]
 
         logits_dict = self.model.decode(z_dict)
@@ -85,14 +85,19 @@ class Trainer:
 
         for st in gb.SENSOR_TYPES:
             sensor_indices = gb.sensor_indices_by_type[st].to(device)
-            bin_offset = gb.value_indices_by_type[st][0].to(device)
+            bin_offset = gb.value_indices_by_type[st][0].item()
 
-            # value_node indices are contiguous per type, so subtracting the first
-            # bin's global index converts to local 0-based bin indices
-            true_bins = value_of_sensor[sensor_indices] - bin_offset
+            if n_graphs == 1:
+                true_bins = value_of_sensor[sensor_indices] - bin_offset
+            else:
+                g_idx = torch.arange(n_graphs, device=device)
+                # gather each graph's sensor rows: [n_graphs, n_sensors_of_type]
+                s_idx_all = sensor_indices.unsqueeze(0) + (g_idx * gb.n_sensors).unsqueeze(1)
+                raw_value_idx = value_of_sensor[s_idx_all]
+                # subtract per-graph value_node offset and type bin_offset to get local bin
+                v_off = (g_idx * gb.n_value_nodes).unsqueeze(1)
+                true_bins = (raw_value_idx - v_off - bin_offset).flatten()
 
-            # cross_entropy applies softmax per row independently, so each sensor gets
-            # its own probability distribution over its bins — not one softmax over all sensors
             total_loss = total_loss + F.cross_entropy(logits_dict[st], true_bins)
 
         return total_loss / len(gb.SENSOR_TYPES)

@@ -15,13 +15,17 @@ class InnerProductDecoder(nn.Module):
     decoders (bilinear, MLP, etc.) for later experiments.
     """
 
-    def forward(self, z_src: torch.Tensor, z_dst: torch.Tensor) -> torch.Tensor:
+    def forward(self, z_src: torch.Tensor, z_dst: torch.Tensor, batched: bool = False) -> torch.Tensor:
         """Return logit matrix via inner product.
 
         Args:
-            z_src: source node embeddings      [n_src, latent_channels]
-            z_dst: destination node embeddings [n_dst, latent_channels]
+            z_src:   [n_src, latent]          or [n_graphs, n_src, latent] if batched
+            z_dst:   [n_dst, latent]          or [n_graphs, n_dst, latent] if batched
+            batched: if True use bmm and flatten graphs into the first dim;
+                     output is [n_graphs * n_src, n_dst]
         Returns:
-            logits  [n_src, n_dst]
+            logits  [n_src, n_dst]  or  [n_graphs * n_src, n_dst]
         """
+        if batched:
+            return torch.bmm(z_src, z_dst.transpose(1, 2)).flatten(0, 1)
         return z_src @ z_dst.T

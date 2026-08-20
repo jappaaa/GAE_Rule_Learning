@@ -1,3 +1,4 @@
+import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.nn import to_hetero
@@ -59,19 +60,29 @@ class GraphAutoEncoder(nn.Module):
     def decode(self, z_dict: dict) -> dict:
         """Return raw logits over value nodes per sensor type.
 
-        For each sensor type, computes logits [n_sensors_of_type, n_bins_of_type]
-        against all value nodes of that type via inner product.
+        For each sensor type, computes logits [n_graphs * n_sensors_of_type, n_bins_of_type]
+        against the value nodes of that type via inner product.
         Pass to F.cross_entropy directly in the trainer (applies softmax internally).
         Call forward() instead to get softmax probabilities for rule extraction.
 
         Returns:
-            dict mapping sensor_type -> logits [n_sensors_of_type, n_bins_of_type]
+            dict mapping sensor_type -> logits [n_graphs * n_sensors_of_type, n_bins_of_type]
         """
         z_sensor = z_dict['sensor']
         z_value  = z_dict['value_node']
+        n_graphs = z_sensor.shape[0] // self.gb.n_sensors
         logits = {}
+
         for st in self.gb.SENSOR_TYPES:
             sensor_indices = self.gb.sensor_indices_by_type[st].to(z_sensor.device)
-            value_indices = self.gb.value_indices_by_type[st].to(z_value.device)
-            logits[st] = self.decoder(z_sensor[sensor_indices], z_value[value_indices])
+            value_indices  = self.gb.value_indices_by_type[st].to(z_value.device)
+
+            if n_graphs == 1:
+                logits[st] = self.decoder(z_sensor[sensor_indices], z_value[value_indices])
+            else:
+                g_idx = torch.arange(n_graphs, device=z_sensor.device)
+                z_s = z_sensor[sensor_indices.unsqueeze(0) + (g_idx * self.gb.n_sensors).unsqueeze(1)]
+                z_v = z_value[value_indices.unsqueeze(0) + (g_idx * self.gb.n_value_nodes).unsqueeze(1)]
+                logits[st] = self.decoder(z_s, z_v, batched=True)
+
         return logits

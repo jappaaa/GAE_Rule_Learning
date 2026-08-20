@@ -35,23 +35,49 @@ class Masker:
         }
 
     def apply(self, data: HeteroData) -> HeteroData:
-        ei = data[('value_node', 'measured_by', 'sensor')].edge_index
-        n_keep = ei.shape[1] - max(1, int(ei.shape[1] * self.mask_ratio))
-        perm = torch.randperm(ei.shape[1], device=ei.device)
-        keep_sensor_indices = perm[:n_keep]
-        mask_sensor_indices = perm[n_keep:]
+        n_graphs = getattr(data, 'num_graphs', 1)
+        ei_full = data[('value_node', 'measured_by', 'sensor')].edge_index
 
-        if self.strategy == 'remove':
-            new_ei = ei[:, keep_sensor_indices]
-        elif self.strategy == 'all_bins':
-            new_ei = self._all_bins(ei, keep_sensor_indices, mask_sensor_indices)
-        elif self.strategy == 'random_bin':
-            new_ei = self._random_bin(ei, keep_sensor_indices, mask_sensor_indices)
+        if n_graphs == 1:
+            new_ei = self._apply_single(ei_full)
+        else:
+            n_s = self.gb.n_sensors
+            n_v = self.gb.n_value_nodes
+            parts = []
+            for g in range(n_graphs):
+                # for the current graph obtain the sensor and value node offsets and obtain the indices of the edges in the batch index belonging to the currrent graph
+                s_off = g * n_s
+                v_off = g * n_v
+                in_b = (ei_full[1] >= s_off) & (ei_full[1] < s_off + n_s)
+
+                # needed to subtract the offset from the indices, such that the logic in the masking methods doesn't break, e.g., value_indices_by_type and sensor_by_type
+                # utilize indices from 0 to num_nodes, and not the incremented ones by batching from the DataLoader
+                offset = torch.tensor([[v_off], [s_off]], dtype=torch.long, device=ei_full.device) 
+                ei_local = ei_full[:, in_b] - offset
+
+                # offset is added back to the masked edge_index
+                parts.append(self._apply_single(ei_local) + offset)
+
+            new_ei = torch.cat(parts, dim=1)
 
         data[('value_node', 'measured_by', 'sensor')].edge_index = new_ei
         if self.gb.bidirectional:
             data[('sensor', 'has_measure', 'value_node')].edge_index = new_ei.flip(0)
         return data
+
+    def _apply_single(self, ei: torch.Tensor) -> torch.Tensor:
+        """Mask a single graph's measured_by edge index (local indices)."""
+        n_keep = ei.shape[1] - max(1, int(ei.shape[1] * self.mask_ratio))
+        perm = torch.randperm(ei.shape[1], device=ei.device)
+        keep_indices = perm[:n_keep]
+        mask_indices = perm[n_keep:]
+
+        if self.strategy == 'remove':
+            return ei[:, keep_indices]
+        elif self.strategy == 'all_bins':
+            return self._all_bins(ei, keep_indices, mask_indices)
+        elif self.strategy == 'random_bin':
+            return self._random_bin(ei, keep_indices, mask_indices)
 
     def _all_bins(self, ei, keep_sensor_indices, mask_sensor_indices):
         """Replace each masked edge with edges to all bins of the sensor's type."""
