@@ -22,6 +22,10 @@ data/processed/*
 experiments/results/*
 !experiments/results/.gitkeep
 checkpoints/
+results/
+rules/
+visualizations/
+lib/
 
 # IDE
 .vscode/
