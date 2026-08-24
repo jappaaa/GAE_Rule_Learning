@@ -166,6 +166,58 @@ class GraphBuilder:
             value_x[v_i, 1 + type_to_idx[st]] = 1.0
         self.value_node_x = value_x
 
+    def build_sensor_hop_map(self, max_hops: int) -> dict:
+        """Return {sensor_idx: frozenset(reachable_sensor_indices)} via BFS on static topology.
+
+        Uses connected + has_sensor/located_at edges only (no measured_by/has_measure),
+        so the result is independent of any particular timestamp's dynamic edges.
+        Pass max_hops = num_layers - 1 to account for the one hop from antecedent
+        value_node to antecedent sensor before traversing topology.
+        """
+        # Determine the global offsets for each node type
+        n_j = len(self.junction_idx)
+        n_r = len(self.reservoir_idx)
+        n_p = len(self.pipe_idx)
+        off_r = n_j
+        off_p = n_j + n_r
+        off_s = n_j + n_r + n_p
+        total = off_s + self.n_sensors
+
+        # set the offsets per node type for easy access
+        type_off = {'junction': 0, 'reservoir': off_r, 'pipe': off_p, 'sensor': off_s}
+
+        # from the typespecific edge indexes, create a global one 
+        adj = [[] for _ in range(total)]
+        for (src_type, _, dst_type), ei in {**self.connected_edges, **self.has_sensor_edges}.items():
+            o_src = type_off[src_type]
+            o_dst = type_off[dst_type]
+            for s, d in zip(ei[0].tolist(), ei[1].tolist()):
+                adj[o_src + s].append(o_dst + d)
+
+        # use a breadth first search approach to traverse the graph up to max_hops for each sensor node
+        # to obtain the reachable sensors.
+        sensor_hop_map = {}
+        for s_idx in range(self.n_sensors):
+            start = off_s + s_idx
+            dist = {start: 0}
+            queue = [start]
+            reachable = set() # start without the node itself (these are the antecedents and should not be considered)
+            qi = 0
+            while qi < len(queue):
+                node = queue[qi]; qi += 1
+                d = dist[node]
+                if d >= max_hops:
+                    continue
+                for nb in adj[node]:
+                    if nb not in dist:
+                        dist[nb] = d + 1
+                        queue.append(nb)
+                        if nb >= off_s:
+                            reachable.add(nb - off_s)
+            sensor_hop_map[s_idx] = frozenset(reachable)
+
+        return sensor_hop_map
+
     def build_base(self, attributes: dict) -> HeteroData:
         """Build the static HeteroData for one scenario (node features + static edges).
         Called once per scenario; result is reused across all its timestamps."""

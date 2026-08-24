@@ -32,6 +32,10 @@ class RuleExtractor:
             for st in graph_builder.SENSOR_TYPES
         }
 
+        # create the sensor hop map in case consequents need to be filtered based on reachability
+        if config.filter_consequents_by_hops:
+            self.sensor_hop_map = graph_builder.build_sensor_hop_map(max_hops=config.num_layers - 1)
+
     def extract(self) -> list[dict]:
         """Enumerate all valid antecedents, query the model in batches, and return candidate rules.
 
@@ -96,18 +100,29 @@ class RuleExtractor:
         """
         antecedent_sensors = {(st, sname) for (st, sname, _) in antecedent}
 
+        # check if the probs of the antecedent items pass the antecedent thresholds
         for (st, sname, bin_idx) in antecedent:
             s_idx = self.gb.sensor_idx[(st, sname)]
             row = self.sensor_to_row[st][s_idx]
             if probs[st][row, bin_idx].item() < self.config.antecedent_threshold:
                 return []
 
+        # obtain the reachable set of sensors from the antecedent sensors
+        if self.config.filter_consequents_by_hops:
+            reachable = set()
+            for (st, sname, _) in antecedent:
+                s_idx = self.gb.sensor_idx[(st, sname)]
+                reachable |= self.sensor_hop_map[s_idx]
+
+        # obtain the list of consequents for the given antecedent items
         consequents = []
         for st in self.gb.SENSOR_TYPES:
             type_probs = probs[st]  # [n_sensors_of_type, n_bins]
             for row, s_idx in enumerate(self.gb.sensor_indices_by_type[st].tolist()):
                 _, sname = self.idx_to_sensor[s_idx]
-                if (st, sname) in antecedent_sensors:
+                if (st, sname) in antecedent_sensors: # antecedent items cannot form the consequents
+                    continue
+                if self.config.filter_consequents_by_hops and s_idx not in reachable: # if filter is applied, filter out unreachable consequents
                     continue
                 for bin_idx in range(self.gb.n_bins_per_type[st]):
                     if type_probs[row, bin_idx].item() >= self.config.consequent_threshold:
