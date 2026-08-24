@@ -39,6 +39,9 @@ class RuleEvaluator:
 
         if 'confidence' in metrics or 'lift' in metrics or 'zhang' in metrics or 'coverage' in metrics:
             support_ant, covered = self._compute_support(ant_cols, track_coverage='coverage' in metrics)
+            averages['support_ant'] = round(support_ant.mean().item(), 4)
+            for rule, v in zip(rules, support_ant.tolist()):
+                rule['support_ant'] = round(v, 4)
             if 'coverage' in metrics:
                 averages['coverage'] = round(covered.float().mean().item(), 4)
             if 'confidence' in metrics or 'lift' in metrics or 'zhang' in metrics:
