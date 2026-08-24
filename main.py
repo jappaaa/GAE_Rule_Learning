@@ -4,6 +4,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 
+import pandas as pd
 import torch
 
 from src.data.dataset import LeakDBDataset
@@ -108,32 +109,45 @@ def main():
     for rule in rules[:5]:
         print(f"  {rule['antecedent']} -> {rule['consequent']}")
 
-    print("Evaluating rules...")
-    evaluator = RuleEvaluator(dataset, config, device)
-    evaluated_rules, averages = evaluator.evaluate(rules)
-    if config.filter_rules:
-        print(f"Evaluation complete — {len(evaluated_rules)} rules pass support>={config.min_support} and confidence>={config.min_confidence}")
-    else:
-        print(f"Evaluation complete — {len(evaluated_rules)} rules (no filtering applied)")
-    print(f"Averages over all {len(rules)} rules: " + " | ".join(f"{k}={v:.4f}" for k, v in averages.items()))
-    for rule in evaluated_rules[:5]:
-        print(f"  support={rule['support']:.3f} conf={rule['confidence']:.3f} lift={rule['lift']:.3f} zhang={rule['zhang']:.3f} | {rule['antecedent']} -> {rule['consequent']}")
-    print(f"Data coverage: {averages.get('coverage', 'n/a')}")
+    if config.evaluate_rules:
+        print("Evaluating rules...")
+        evaluator = RuleEvaluator(dataset, config, device)
+        evaluated_rules, averages = evaluator.evaluate(rules)
+        if config.filter_rules:
+            print(f"Evaluation complete — {len(evaluated_rules)} rules pass support>={config.min_support} and confidence>={config.min_confidence}")
+        else:
+            print(f"Evaluation complete — {len(evaluated_rules)} rules (no filtering applied)")
+        print(f"Averages over all {len(rules)} rules: " + " | ".join(f"{k}={v:.4f}" for k, v in averages.items()))
+        for rule in evaluated_rules[:5]:
+            print(f"  support={rule['support']:.3f} conf={rule['confidence']:.3f} lift={rule['lift']:.3f} zhang={rule['zhang']:.3f} | {rule['antecedent']} -> {rule['consequent']}")
+        print(f"Data coverage: {averages.get('coverage', 'n/a')}")
 
-    results = {
-        'timestamp': datetime.now().isoformat(timespec='seconds'),
-        'config': dataclasses.asdict(config),
-        'n_rules_total': len(rules),
-        'n_rules_after_filter': len(evaluated_rules),
-        'averages': averages,
-        'top_rules': evaluated_rules[:10],
-    }
-    results_dir = Path(config.results_dir)
-    results_dir.mkdir(parents=True, exist_ok=True)
-    results_path = results_dir / f"run_{results['timestamp'].replace(':', '-')}.json"
-    with open(results_path, 'w') as f:
-        json.dump(results, f, indent=2)
-    print(f"Results saved to {results_path}")
+        timestamp = datetime.now().isoformat(timespec='seconds')
+        run_dir = Path(config.results_dir) / f"run_{timestamp.replace(':', '-')}"
+        run_dir.mkdir(parents=True, exist_ok=True)
+
+        rows = []
+        for r in evaluated_rules:
+            row = {'antecedent': str(r['antecedent']), 'consequent': str(r['consequent'])}
+            for k in ('support', 'support_ant', 'confidence', 'lift', 'zhang'):
+                if k in r:
+                    row[k] = r[k]
+            rows.append(row)
+        rules_df = pd.DataFrame(rows)
+        rules_df.to_csv(run_dir / 'rules.csv', index=False)
+        print(f"Rules CSV saved to {run_dir / 'rules.csv'}")
+
+        results = {
+            'timestamp': timestamp,
+            'config': dataclasses.asdict(config),
+            'n_rules_total': len(rules),
+            'n_rules_after_filter': len(evaluated_rules),
+            'averages': averages,
+            'top_rules': evaluated_rules[:10],
+        }
+        with open(run_dir / 'run.json', 'w') as f:
+            json.dump(results, f, indent=2)
+        print(f"Results saved to {run_dir / 'run.json'}")
 
 
 if __name__ == "__main__":
