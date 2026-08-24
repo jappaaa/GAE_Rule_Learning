@@ -22,32 +22,34 @@ class Config:
     # Dataset
     scenarios: list = field(default_factory=lambda: list(range(1, 2)))
     n_bins: int = 10
-    train_ratio: float = 0.8
-    val_ratio: float = 0.1  # test_ratio = 1 - train_ratio - val_ratio
+    train_ratio: float = 0.75
+    val_ratio: float = 0.125  # test_ratio = 1 - train_ratio - val_ratio
 
     # Graph
-    bidirectional_has_measure: bool = False
+    bidirectional_has_measure: bool = True
 
     # Model
     hidden_channels: int = 32
     latent_channels: int = 4
     encoder_type: str = "sage"  # "sage" or "gat"
-    num_layers: int = 7         # Important as this determines how far message travel through the graph
-    aggr: str = "sum"           # how to combine messages from different edge types in heterogeneous GNN, passed to .to_hetero()
+    num_layers: int = 7         # Important as this determines how far message travel through the graph 
+    aggr: str = "sum"           # how to combine messages from different edge types in heterogeneous GNN
 
     # Training
-    train_model: bool = True
+    train_model: bool = False
     checkpoint_path: str = 'checkpoints/best_model.pt'
     lr: float = 1e-3
-    epochs: int = 2
+    epochs: int = 50
     patience: int = 5
     batch_size: int = 128
     use_masking: bool = True
-    mask_ratio: float = 0.75
-    masking_strategy: str = 'remove'  # 'remove' or 'all_bins'
+    mask_ratio: float = 0.80
+    masking_strategy: str = 'remove'  # 'remove', 'all_bins', or 'random_bin'
 
     # Rule extraction
-    learn_rules: bool = False
+    filter_consequents_by_hops: bool = True  # If set to true, only sensors within the receptive field of the antecedents are considered as consequents
+    learn_rules: bool = True
+    evaluate_rules: bool = True
     rules_path: str = 'rules/rules.json'
     extraction_batch_size: int = 256
     antecedent_threshold: float = 0.9
