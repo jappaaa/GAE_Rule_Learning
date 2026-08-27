@@ -52,6 +52,7 @@ class LeakDBDataset(Dataset):
             self.topology,
             self.n_bins_per_type,
             bidirectional=config.bidirectional_has_measure,
+            virtual_node_mode=config.virtual_node_mode,
         )
 
     @property
@@ -117,6 +118,7 @@ class LeakDBDataset(Dataset):
             self.topology,
             n_bins_per_type,
             bidirectional=self.config.bidirectional_has_measure,
+            virtual_node_mode=self.config.virtual_node_mode,
         )
 
         # --- Step 4: build and save all graphs (scenario by scenario) ---

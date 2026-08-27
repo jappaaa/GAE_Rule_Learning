@@ -20,47 +20,48 @@ class Config:
     random_seed: int = 42
 
     # Dataset
-    scenarios: list = field(default_factory=lambda: list(range(1, 2)))
+    scenarios: list = field(default_factory=lambda: list(range(1, 2))) # Although we do not change its contents, default factory is used to avoid sharing same list amongst different instances
     n_bins: int = 10
     train_ratio: float = 0.75
     val_ratio: float = 0.125  # test_ratio = 1 - train_ratio - val_ratio
 
     # Graph
-    bidirectional_has_measure: bool = True
+    bidirectional_has_measure: bool = False
+    virtual_node_mode: str = 'hierarchical'  # 'none', 'global', 'hierarchical', 'hierarchical_direct', or 'type_interconnected' if not none, set filter_consequents_by_hops to False
 
     # Model
     hidden_channels: int = 32
     latent_channels: int = 4
     encoder_type: str = "sage"  # "sage" or "gat"
-    num_layers: int = 7         # Important as this determines how far message travel through the graph 
+    num_layers: int = 4         # Important as this determines how far message travel through the graph 
     aggr: str = "sum"           # how to combine messages from different edge types in heterogeneous GNN
 
     # Training
-    train_model: bool = False
+    train_model: bool = True
     checkpoint_path: str = 'checkpoints/best_model.pt'
     lr: float = 1e-3
-    epochs: int = 50
-    patience: int = 5
+    epochs: int = 30
+    patience: int = 10
     batch_size: int = 128
     use_masking: bool = True
     mask_ratio: float = 0.80
     masking_strategy: str = 'remove'  # 'remove', 'all_bins', or 'random_bin'
 
     # Rule extraction
-    filter_consequents_by_hops: bool = True  # If set to true, only sensors within the receptive field of the antecedents are considered as consequents
     learn_rules: bool = True
     evaluate_rules: bool = True
+    filter_consequents_by_hops: bool = False  # If set to true, only sensors within the receptive field of the antecedents are considered as consequents
     rules_path: str = 'rules/rules.json'
-    extraction_batch_size: int = 256
-    antecedent_threshold: float = 0.9
-    consequent_threshold: float = 0.9
+    extraction_batch_size: int = 512
+    antecedent_threshold: float = 0.6
+    consequent_threshold: float = 0.7
     max_antecedent_size: int = 2
     filter_rules: bool = False
     min_support: float = 0.1
     min_confidence: float = 0.5
 
     # Visualization (diagnostic only)
-    visualize_graphs: bool = False
+    visualize_graphs: bool = True
     viz_output_dir: str = 'visualizations'
 
     # Results
