@@ -132,8 +132,10 @@ class Trainer:
             progress = tqdm(self.val_loader, desc=f"  val epoch {epoch}", colour="blue", leave=False)
             for data in progress:
                 data = data.to(self.device)
-                z_dict = self.model.encode(data.x_dict, data.edge_index_dict)
                 measured_by_ei = data[('value_node', 'measured_by', 'sensor')].edge_index
+                if self.config.mask_validation:
+                    data = self.masker.apply(data)
+                z_dict = self.model.encode(data.x_dict, data.edge_index_dict)
                 loss = self._loss(z_dict, measured_by_ei)
                 total_loss += loss.item()
                 progress.set_postfix(loss=f"{loss.item():.4f}")

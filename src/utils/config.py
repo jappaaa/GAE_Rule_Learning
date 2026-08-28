@@ -27,13 +27,13 @@ class Config:
 
     # Graph
     bidirectional_has_measure: bool = False
-    virtual_node_mode: str = 'hierarchical'  # 'none', 'global', 'hierarchical', 'hierarchical_direct', or 'type_interconnected' if not none, set filter_consequents_by_hops to False
+    virtual_node_mode: str = 'global'  # 'none', 'global', 'hierarchical', 'hierarchical_direct', or 'type_interconnected' if not none, set filter_consequents_by_hops to False
 
     # Model
     hidden_channels: int = 32
     latent_channels: int = 4
     encoder_type: str = "sage"  # "sage" or "gat"
-    num_layers: int = 4         # Important as this determines how far message travel through the graph 
+    num_layers: int = 3         # Important as this determines how far message travel through the graph 
     aggr: str = "sum"           # how to combine messages from different edge types in heterogeneous GNN
 
     # Training
@@ -41,9 +41,10 @@ class Config:
     checkpoint_path: str = 'checkpoints/best_model.pt'
     lr: float = 1e-3
     epochs: int = 30
-    patience: int = 10
+    patience: int = 15
     batch_size: int = 128
     use_masking: bool = True
+    mask_validation: bool = False
     mask_ratio: float = 0.80
     masking_strategy: str = 'remove'  # 'remove', 'all_bins', or 'random_bin'
 
