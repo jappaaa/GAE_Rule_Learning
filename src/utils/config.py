@@ -24,7 +24,6 @@ class Config:
     data_fraction: float = 1.0  # fraction of timestamps per scenario to use; delete processed dir when changing
     n_bins: int = 10
     train_ratio: float = 0.75
-    val_ratio: float = 0.125  # test_ratio = 1 - train_ratio - val_ratio
 
     # Graph
     bidirectional_has_measure: bool = False
