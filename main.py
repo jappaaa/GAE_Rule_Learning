@@ -27,7 +27,7 @@ def main():
 
     print("Loading dataset...")
     dataset = LeakDBDataset(config)
-    print(f"Dataset ready — {len(dataset)} graphs | {len(dataset.train_indices)} train / {len(dataset.val_indices)} val / {len(dataset.test_indices)} test")
+    print(f"Dataset ready — {len(dataset)} graphs | {len(dataset.train_indices)} train / {len(dataset.val_indices)} val")
 
     print("Initialising model...")
     sample = dataset[0]

@@ -1,6 +1,6 @@
+import json
 import os
 import random
-from collections import defaultdict
 
 import pandas as pd
 import torch
@@ -28,25 +28,22 @@ class LeakDBDataset(Dataset):
 
         super().__init__(root=config.data_dir, transform=transform)
 
-        meta = torch.load(
-            os.path.join(self.processed_dir, 'metadata.pt'),
-            weights_only=False,
-        )
-        self.pairs = meta['pairs']                  # list of (scenario, t, label)
-        self.train_indices = meta['train_indices']
-        self.val_indices = meta['val_indices']
-        self.test_indices = meta['test_indices']
+        self.df = pd.read_parquet(os.path.join(self.processed_dir, 'dataset.parquet'))
+
+        with open(os.path.join(self.processed_dir, 'metadata.json')) as f:
+            meta = json.load(f)
         self.n_bins_per_type = meta['n_bins_per_type']
+        self.train_indices = meta['train_indices']
+        self.val_indices   = meta['val_indices']
+
         self.base_graphs = {
             s: torch.load(os.path.join(self.processed_dir, f'base_{s}.pt'), weights_only=False)
             for s in self.config.scenarios
         }
-        test_transactions = torch.load(
-            os.path.join(self.processed_dir, 'test_transactions.pt'),
-            weights_only=False,
-        )
-        self.test_tensor = test_transactions['tensor']
-        self.test_items = test_transactions['items']
+
+        item_cols = [c for c in self.df.columns if c not in ('scenario', 'split', 'label')]
+        self.items = [(st, sname, int(b)) for st, sname, b in (c.split(';') for c in item_cols)]
+        self.tensor = torch.tensor(self.df[item_cols].values, dtype=torch.bool)
 
         self.gb = GraphBuilder(
             self.topology,
@@ -61,52 +58,47 @@ class LeakDBDataset(Dataset):
 
     @property
     def processed_file_names(self):
-        return ['metadata.pt', 'test_transactions.pt'] + [f'base_{s}.pt' for s in self.config.scenarios]
+        return ['dataset.parquet', 'metadata.json'] + [f'base_{s}.pt' for s in self.config.scenarios]
 
     def process(self):
-        # Load each scenario once and cache for use across all steps
-        sensor_cache = {s: self.loader.load_sensor_data(s) for s in self.config.scenarios}
-
-        # --- Step 1: collect all (scenario, t, label) pairs ---
-        all_pairs = []
+        # --- Step 1: build raw wide DataFrame (one row per timestamp, one column per sensor) ---
+        scenario_dfs = []
         for scenario in self.config.scenarios:
-            sd = sensor_cache[scenario]
-            n_t = len(sd['pressures'])
-            for t in range(n_t):
-                label = int(sd['labels'].iloc[t, 0])
-                all_pairs.append((scenario, t, label))
+            sd = self.loader.load_sensor_data(scenario)
+            n_t = int(len(sd['pressures']) * self.config.data_fraction)
+
+            pressures = sd['pressures'].iloc[:n_t].rename(columns=lambda c: f'pressure;{c}')
+            flows     = sd['flows'].iloc[:n_t].rename(columns=lambda c: f'flow;{c}')
+            demands   = sd['demands'].iloc[:n_t].rename(columns=lambda c: f'demand;{c}')
+            label_col = sd['labels'].iloc[:n_t, 0].astype(int).rename('label')
+
+            df_s = pd.concat([pressures, flows, demands, label_col], axis=1)
+            df_s['scenario'] = scenario
+            scenario_dfs.append(df_s)
+
+        df = pd.concat(scenario_dfs, axis=0).reset_index(drop=True)
 
         # --- Step 2: shuffle and split by ratio ---
+        n = len(df)
         rng = random.Random(self.config.random_seed)
-        rng.shuffle(all_pairs)
-        n = len(all_pairs)
+        shuffled_idx = list(range(n))
+        rng.shuffle(shuffled_idx)
+        df = df.iloc[shuffled_idx].reset_index(drop=True)
+
         n_train = int(n * self.config.train_ratio)
-        n_val = int(n * self.config.val_ratio)
         train_indices = list(range(n_train))
-        val_indices = list(range(n_train, n_train + n_val))
-        test_indices = list(range(n_train + n_val, n))
+        val_indices   = list(range(n_train, n))
+        df['split'] = ['train' if i < n_train else 'val' for i in range(n)]
 
-        # --- Step 3: fit discretizers on training timestamps only ---
-        train_ts_by_scenario = defaultdict(list)
-        for idx in train_indices:
-            scenario, t, _ = all_pairs[idx]
-            train_ts_by_scenario[scenario].append(t)
+        # --- Step 3: fit discretizers on training rows only ---
+        train_df = df[df['split'] == 'train']
+        p_cols = [c for c in df.columns if c.startswith('pressure;')]
+        f_cols = [c for c in df.columns if c.startswith('flow;')]
+        d_cols = [c for c in df.columns if c.startswith('demand;')]
 
-        test_ts_by_scenario = defaultdict(list)
-        for idx in test_indices:
-            scenario, t, _ = all_pairs[idx]
-            test_ts_by_scenario[scenario].append(t)
-
-        pressure_list, flow_list, demand_list = [], [], []
-        for scenario, timestamps in train_ts_by_scenario.items():
-            sd = sensor_cache[scenario]
-            pressure_list.append(sd['pressures'].iloc[timestamps])
-            flow_list.append(sd['flows'].iloc[timestamps])
-            demand_list.append(sd['demands'].iloc[timestamps])
-
-        disc_p = Discretizer(n_bins=self.config.n_bins, pooled=True).fit(pd.concat(pressure_list))
-        disc_f = Discretizer(n_bins=self.config.n_bins, pooled=True).fit(pd.concat(flow_list))
-        disc_d = Discretizer(n_bins=self.config.n_bins, pooled=True).fit(pd.concat(demand_list))
+        disc_p = Discretizer(n_bins=self.config.n_bins, pooled=True).fit(train_df[p_cols])
+        disc_f = Discretizer(n_bins=self.config.n_bins, pooled=True).fit(train_df[f_cols])
+        disc_d = Discretizer(n_bins=self.config.n_bins, pooled=True).fit(train_df[d_cols])
 
         n_bins_per_type = {
             'pressure': disc_p.get_n_bins(),
@@ -121,85 +113,59 @@ class LeakDBDataset(Dataset):
             virtual_node_mode=self.config.virtual_node_mode,
         )
 
-        # --- Step 4: build and save all graphs (scenario by scenario) ---
-        # pair_idx_map: (scenario, t) -> position in shuffled all_pairs (= graph filename index)
-        # at the same time we also create a one hot encoded sensor df to evaluate the rules later on.
-        pair_idx_map = {(s, t): i for i, (s, t, _) in enumerate(all_pairs)}
+        disc_p_df = disc_p.transform(df[p_cols])
+        disc_f_df = disc_f.transform(df[f_cols])
+        disc_d_df = disc_d.transform(df[d_cols])
 
-        test_chunks = []
-
+        # --- Step 4: build and save all graphs (scenario by scenario because each scenario has different base graph) ---
         for scenario in self.config.scenarios:
-            sd = sensor_cache[scenario]
             attrs = self.loader.load_attributes(scenario)
             base = gb.build_base(attrs)
 
             torch.save(base, os.path.join(self.processed_dir, f'base_{scenario}.pt'))
 
-            pressures_disc = disc_p.transform(sd['pressures'])
-            flows_disc     = disc_f.transform(sd['flows'])
-            demands_disc   = disc_d.transform(sd['demands'])
-
-            for t in range(len(sd['pressures'])):
-                graph_idx = pair_idx_map[(scenario, t)]
+            sc_df = df[df['scenario'] == scenario]
+            for graph_idx, row in sc_df.iterrows():
                 graph = gb.build(
                     base,
-                    pressures_disc.iloc[t],
-                    flows_disc.iloc[t],
-                    demands_disc.iloc[t],
+                    disc_p_df.loc[graph_idx].rename(index=lambda c: c.split(';')[1]),
+                    disc_f_df.loc[graph_idx].rename(index=lambda c: c.split(';')[1]),
+                    disc_d_df.loc[graph_idx].rename(index=lambda c: c.split(';')[1]),
                 )
-                graph.y = torch.tensor(
-                    [all_pairs[graph_idx][2]], dtype=torch.long
-                )
+                graph.y = torch.tensor([int(row['label'])], dtype=torch.long)
                 graph.validate(raise_on_error=True)
                 torch.save(
                     graph,
                     os.path.join(self.processed_dir, f'graph_{graph_idx}.pt'),
                 )
 
-            test_ts = test_ts_by_scenario[scenario]
-            if test_ts:
-                disc_by_type = {
-                    'pressure': pressures_disc,
-                    'flow':     flows_disc,
-                    'demand':   demands_disc,
-                }
-                # A dict where the keys are (st, sname, bin_idx) and the values are boolean arrays indicating which rows have that specific
-                # sensor and bin combination. After this is transformed into a df containing the one hot encoded format of all sensors of all types
-                # of the current scenario
-                chunk = {
-                    (st, sname, bin_idx): (disc_df.iloc[test_ts][sname].values == bin_idx)
-                    for st, disc_df in disc_by_type.items()
-                    for sname in disc_df.columns
-                    for bin_idx in range(n_bins_per_type[st])
-                }
-                test_chunks.append(pd.DataFrame(chunk))
+        # --- Step 5: build and save one-hot transaction DataFrame (all rows) ---
+        hot_cols = {}
+        for c in p_cols:
+            for bin_idx in range(n_bins_per_type['pressure']):
+                hot_cols[f'{c};{bin_idx}'] = (disc_p_df[c].values == bin_idx)
+        for c in f_cols:
+            for bin_idx in range(n_bins_per_type['flow']):
+                hot_cols[f'{c};{bin_idx}'] = (disc_f_df[c].values == bin_idx)
+        for c in d_cols:
+            for bin_idx in range(n_bins_per_type['demand']):
+                hot_cols[f'{c};{bin_idx}'] = (disc_d_df[c].values == bin_idx)
 
-        # --- Step 5: save test transactions in PyTorch tensors allowing vectorized operations during evaluation ---
-        test_df = pd.concat(test_chunks).reset_index(drop=True)
-        items = list(test_df.columns)
-        tensor = torch.tensor(test_df.values, dtype=torch.bool)
-        torch.save(
-            {'tensor': tensor, 'items': items},
-            os.path.join(self.processed_dir, 'test_transactions.pt'),
-        )
+        hot_df = pd.DataFrame(hot_cols, index=df.index)
 
-        # --- Step 6: save metadata ---
-        torch.save(
-            {
-                'pairs':         all_pairs,
-                'train_indices': train_indices,
-                'val_indices':   val_indices,
-                'test_indices':  test_indices,
+        # --- Step 6: save dataset DataFrame and metadata ---
+        dataset_df = pd.concat([df[['scenario', 'split', 'label']], hot_df], axis=1)
+        dataset_df.to_parquet(os.path.join(self.processed_dir, 'dataset.parquet'))
+
+        with open(os.path.join(self.processed_dir, 'metadata.json'), 'w') as f:
+            json.dump({
                 'n_bins_per_type': n_bins_per_type,
-                'disc_pressure': disc_p,
-                'disc_flow':     disc_f,
-                'disc_demand':   disc_d,
-            },
-            os.path.join(self.processed_dir, 'metadata.pt'),
-        )
+                'train_indices':   train_indices,
+                'val_indices':     val_indices,
+            }, f)
 
     def len(self):
-        return len(self.pairs)
+        return len(self.df)
 
     def get(self, idx):
         return torch.load(

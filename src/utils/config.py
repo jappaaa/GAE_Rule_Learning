@@ -21,6 +21,7 @@ class Config:
 
     # Dataset
     scenarios: list = field(default_factory=lambda: list(range(1, 2))) # Although we do not change its contents, default factory is used to avoid sharing same list amongst different instances
+    data_fraction: float = 1.0  # fraction of timestamps per scenario to use; delete processed dir when changing
     n_bins: int = 10
     train_ratio: float = 0.75
     val_ratio: float = 0.125  # test_ratio = 1 - train_ratio - val_ratio
@@ -44,7 +45,7 @@ class Config:
     patience: int = 15
     batch_size: int = 128
     use_masking: bool = True
-    mask_validation: bool = False
+    mask_validation: bool = True
     mask_ratio: float = 0.80
     masking_strategy: str = 'remove'  # 'remove', 'all_bins', or 'random_bin'
 

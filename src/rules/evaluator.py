@@ -10,9 +10,9 @@ class RuleEvaluator:
     def __init__(self, dataset: LeakDBDataset, config: Config, device: torch.device):
         self.config = config
         self.device = device
-        self.item_to_col = {item: col for col, item in enumerate(dataset.test_items)}
-        # float for matrix multiply; shape (n_test, n_items)
-        self.T = dataset.test_tensor.to(device).float()
+        self.item_to_col = {item: col for col, item in enumerate(dataset.items)}
+        # float for matrix multiply; shape (n_rows, n_items)
+        self.T = dataset.tensor.to(device).float()
 
     def evaluate(self, rules: list[dict], metrics: list[str] = None) -> tuple[list[dict], dict]:
         if metrics is None:
