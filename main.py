@@ -12,9 +12,35 @@ from src.model.gae import GraphAutoEncoder
 from src.training.trainer import Trainer
 from src.training.masking import Masker
 from src.rules.extractor import RuleExtractor
-from src.rules.evaluator import RuleEvaluator
+from src.rules.fp_extractor import FPExtractor
+from src.rules.evaluator import RuleEvaluator, annotate_hop_distances
 from src.utils.config import Config
 from src.utils.visualize import visualize_graph
+
+
+def _save_rules_output(evaluated_rules, averages, all_rules, run_dir, tag, config):
+    rows = []
+    for r in evaluated_rules:
+        row = {'antecedent': str(r['antecedent']), 'consequent': str(r['consequent'])}
+        for k in ('support', 'support_ant', 'confidence', 'lift', 'zhang', 'hop_distance'):
+            if k in r:
+                row[k] = r[k]
+        rows.append(row)
+    rules_df = pd.DataFrame(rows)
+    rules_df.to_csv(run_dir / f'rules_{tag}.csv', index=False)
+    print(f"Rules CSV saved to {run_dir / f'rules_{tag}.csv'}")
+
+    results = {
+        'tag': tag,
+        'config': dataclasses.asdict(config),
+        'n_rules_total': len(all_rules),
+        'n_rules_after_filter': len(evaluated_rules),
+        'averages': averages,
+        'top_rules': evaluated_rules[:10],
+    }
+    with open(run_dir / f'run_{tag}.json', 'w') as f:
+        json.dump(results, f, indent=2)
+    print(f"Results saved to {run_dir / f'run_{tag}.json'}")
 
 
 def main():
@@ -40,11 +66,11 @@ def main():
         trainer = Trainer(model, dataset, config, device)
         trainer.train()
         print("Training complete")
-    else:
-        print(f"Loading checkpoint from {config.checkpoint_path}...")
-        checkpoint = torch.load(config.checkpoint_path, weights_only=False)
-        model.load_state_dict(checkpoint['model_state_dict'])
-        print(f"Checkpoint loaded — epoch {checkpoint['epoch']}, val_loss={checkpoint['val_loss']:.4f}")
+
+    print(f"Loading best checkpoint from {config.checkpoint_path}...")
+    checkpoint = torch.load(config.checkpoint_path, weights_only=False)
+    model.load_state_dict(checkpoint['model_state_dict'])
+    print(f"Checkpoint loaded — epoch {checkpoint['epoch']}, val_loss={checkpoint['val_loss']:.4f}")
 
     if config.visualize_graphs:
         print("\nGenerating graph visualizations...")
@@ -78,76 +104,112 @@ def main():
 
     model.eval()
 
-    if config.learn_rules:
-        print("Extracting rules...")
-        extractor = RuleExtractor(model, dataset.gb, dataset, config, device)
-        rules = extractor.extract()
-        print(f"Extraction complete — {len(rules)} candidate rules")
-        Path(config.rules_path).parent.mkdir(parents=True, exist_ok=True)
-        with open(config.rules_path, 'w') as f:
-            json.dump(rules, f)
-        print(f"Rules saved to {config.rules_path}")
-    else:
-        rules_path = Path(config.rules_path)
-        if not rules_path.exists():
-            raise FileNotFoundError(
-                f"learn_rules=False but no rules file found at '{config.rules_path}'. "
-                "Set learn_rules=True to extract and save rules first."
-            )
-        print(f"Loading rules from {config.rules_path}...")
-        with open(rules_path) as f:
-            raw = json.load(f)
-        rules = [
-            {
-                'antecedent': [tuple(item) for item in rule['antecedent']],
-                'consequent': tuple(rule['consequent']),
-            }
-            for rule in raw
-        ]
-        print(f"Loaded {len(rules)} rules")
+    timestamp = datetime.now().isoformat(timespec='seconds')
+    run_dir = Path(config.results_dir) / f"run_{timestamp.replace(':', '-')}"
+    run_dir.mkdir(parents=True, exist_ok=True)
 
-    for rule in rules[:5]:
-        print(f"  {rule['antecedent']} -> {rule['consequent']}")
-
-    if config.evaluate_rules:
-        print("Evaluating rules...")
-        evaluator = RuleEvaluator(dataset, config, device)
-        evaluated_rules, averages = evaluator.evaluate(rules)
-        if config.filter_rules:
-            print(f"Evaluation complete — {len(evaluated_rules)} rules pass support>={config.min_support} and confidence>={config.min_confidence}")
+    if config.learn_rules or config.evaluate_rules:
+        if config.learn_rules:
+            print("Extracting rules...")
+            extractor = RuleExtractor(model, dataset.gb, dataset, config, device)
+            rules = extractor.extract()
+            print(f"Extraction complete — {len(rules)} candidate rules")
+            Path(config.rules_path).parent.mkdir(parents=True, exist_ok=True)
+            with open(config.rules_path, 'w') as f:
+                json.dump(rules, f)
+            print(f"Rules saved to {config.rules_path}")
         else:
-            print(f"Evaluation complete — {len(evaluated_rules)} rules (no filtering applied)")
-        print(f"Averages over all {len(rules)} rules: " + " | ".join(f"{k}={v:.4f}" for k, v in averages.items()))
-        for rule in evaluated_rules[:5]:
-            print(f"  support={rule['support']:.3f} conf={rule['confidence']:.3f} lift={rule['lift']:.3f} zhang={rule['zhang']:.3f} | {rule['antecedent']} -> {rule['consequent']}")
-        print(f"Data coverage: {averages.get('coverage', 'n/a')}")
+            rules_path = Path(config.rules_path)
+            if not rules_path.exists():
+                raise FileNotFoundError(
+                    f"learn_rules=False but no rules file found at '{config.rules_path}'. "
+                    "Set learn_rules=True to extract and save rules first."
+                )
+            print(f"Loading rules from {config.rules_path}...")
+            with open(rules_path) as f:
+                raw = json.load(f)
+            rules = [
+                {
+                    'antecedent': [tuple(item) for item in rule['antecedent']],
+                    'consequent': tuple(rule['consequent']),
+                }
+                for rule in raw
+            ]
+            print(f"Loaded {len(rules)} rules")
 
-        timestamp = datetime.now().isoformat(timespec='seconds')
-        run_dir = Path(config.results_dir) / f"run_{timestamp.replace(':', '-')}"
-        run_dir.mkdir(parents=True, exist_ok=True)
+        for rule in rules[:5]:
+            print(f"  {rule['antecedent']} -> {rule['consequent']}")
 
-        rows = []
-        for r in evaluated_rules:
-            row = {'antecedent': str(r['antecedent']), 'consequent': str(r['consequent'])}
-            for k in ('support', 'support_ant', 'confidence', 'lift', 'zhang'):
-                if k in r:
-                    row[k] = r[k]
-            rows.append(row)
-        rules_df = pd.DataFrame(rows)
-        rules_df.to_csv(run_dir / 'rules.csv', index=False)
-        print(f"Rules CSV saved to {run_dir / 'rules.csv'}")
+        if config.evaluate_rules:
+            print("Evaluating GAE rules...")
+            evaluator = RuleEvaluator(dataset, config, device)
+            evaluated_rules, averages = evaluator.evaluate(rules)
+            if config.filter_rules:
+                print(f"Evaluation complete — {len(evaluated_rules)} rules pass support>={config.min_support} and confidence>={config.min_confidence}")
+            else:
+                print(f"Evaluation complete — {len(evaluated_rules)} rules (no filtering applied)")
+            print(f"Averages over all {len(rules)} rules: " + " | ".join(f"{k}={v:.4f}" for k, v in averages.items()))
+            for rule in evaluated_rules[:5]:
+                print(f"  support={rule['support']:.3f} conf={rule['confidence']:.3f} lift={rule['lift']:.3f} zhang={rule['zhang']:.3f} | {rule['antecedent']} -> {rule['consequent']}")
+            print(f"Data coverage: {averages.get('coverage', 'n/a')}")
 
-        results = {
-            'timestamp': timestamp,
-            'config': dataclasses.asdict(config),
-            'n_rules_total': len(rules),
-            'n_rules_after_filter': len(evaluated_rules),
-            'averages': averages,
-            'top_rules': evaluated_rules[:10],
-        }
-        with open(run_dir / 'run.json', 'w') as f:
-            json.dump(results, f, indent=2)
-        print(f"Results saved to {run_dir / 'run.json'}")
+            if config.compute_hop_distance:
+                averages['avg_hop_distance'] = annotate_hop_distances(evaluated_rules, dataset.gb)
+                print(f"Average hop distance: {averages['avg_hop_distance']}")
+            _save_rules_output(evaluated_rules, averages, rules, run_dir, 'gae', config)
+
+    if config.learn_rules_fp or config.evaluate_rules_fp:
+        if config.learn_rules_fp:
+            print("Extracting rules via FP-growth...")
+            fp_extractor = FPExtractor(dataset, config)
+            fp_rules = fp_extractor.extract()
+            print(f"FP-growth extraction complete — {len(fp_rules)} candidate rules")
+            Path(config.rules_path_fp).parent.mkdir(parents=True, exist_ok=True)
+            with open(config.rules_path_fp, 'w') as f:
+                json.dump(fp_rules, f)
+            print(f"FP rules saved to {config.rules_path_fp}")
+        else:
+            rules_path_fp = Path(config.rules_path_fp)
+            if not rules_path_fp.exists():
+                raise FileNotFoundError(
+                    f"learn_rules_fp=False but no FP rules file found at '{config.rules_path_fp}'. "
+                    "Set learn_rules_fp=True to extract and save rules first."
+                )
+            print(f"Loading FP rules from {config.rules_path_fp}...")
+            with open(rules_path_fp) as f:
+                raw = json.load(f)
+            fp_rules = [
+                {
+                    'antecedent': [tuple(item) for item in rule['antecedent']],
+                    'consequent': tuple(rule['consequent']),
+                }
+                for rule in raw
+            ]
+            print(f"Loaded {len(fp_rules)} FP rules")
+
+        for rule in fp_rules[:5]:
+            print(f"  {rule['antecedent']} -> {rule['consequent']}")
+
+        if config.evaluate_rules_fp:
+            print("Evaluating FP-growth rules...")
+            fp_evaluator = RuleEvaluator(dataset, config, device)
+            evaluated_fp_rules, fp_averages = fp_evaluator.evaluate(
+                fp_rules,
+                min_support=config.min_support_fp,
+                min_confidence=config.min_confidence_fp,
+            )
+            if config.filter_rules:
+                print(f"FP evaluation complete — {len(evaluated_fp_rules)} rules pass support>={config.min_support} and confidence>={config.min_confidence}")
+            else:
+                print(f"FP evaluation complete — {len(evaluated_fp_rules)} rules (no filtering applied)")
+            print(f"FP averages over all {len(fp_rules)} rules: " + " | ".join(f"{k}={v:.4f}" for k, v in fp_averages.items()))
+            for rule in evaluated_fp_rules[:5]:
+                print(f"  support={rule['support']:.3f} conf={rule['confidence']:.3f} lift={rule['lift']:.3f} zhang={rule['zhang']:.3f} | {rule['antecedent']} -> {rule['consequent']}")
+
+            if config.compute_hop_distance:
+                fp_averages['avg_hop_distance'] = annotate_hop_distances(evaluated_fp_rules, dataset.gb)
+                print(f"Average hop distance: {fp_averages['avg_hop_distance']}")
+            _save_rules_output(evaluated_fp_rules, fp_averages, fp_rules, run_dir, 'fp', config)
 
 
 if __name__ == "__main__":
