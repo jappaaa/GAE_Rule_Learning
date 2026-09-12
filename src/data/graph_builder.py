@@ -237,6 +237,48 @@ class GraphBuilder:
         if self.virtual_node_mode in ('hierarchical', 'hierarchical_direct', 'global'):
             self.global_virtual_x = torch.zeros(1, 1)
 
+    def build_sensor_distance_map(self) -> dict:
+        """Return {sensor_idx: {other_sensor_idx: hop_distance}} via BFS on static topology.
+
+        Uses connected + has_sensor/located_at edges only, same as build_sensor_hop_map.
+        No hop limit — returns actual distances to all reachable sensors.
+        """
+        n_j = len(self.junction_idx)
+        n_r = len(self.reservoir_idx)
+        n_p = len(self.pipe_idx)
+        off_r = n_j
+        off_p = n_j + n_r
+        off_s = n_j + n_r + n_p
+        total = off_s + self.n_sensors
+
+        type_off = {'junction': 0, 'reservoir': off_r, 'pipe': off_p, 'sensor': off_s}
+
+        adj = [[] for _ in range(total)]
+        for (src_type, _, dst_type), ei in {**self.connected_edges, **self.has_sensor_edges}.items():
+            o_src = type_off[src_type]
+            o_dst = type_off[dst_type]
+            for s, d in zip(ei[0].tolist(), ei[1].tolist()):
+                adj[o_src + s].append(o_dst + d)
+
+        distance_map = {}
+        for s_idx in range(self.n_sensors):
+            start = off_s + s_idx
+            dist = {start: 0}
+            queue = [start]
+            qi = 0
+            while qi < len(queue):
+                node = queue[qi]; qi += 1
+                for nb in adj[node]:
+                    if nb not in dist:
+                        dist[nb] = dist[node] + 1
+                        queue.append(nb)
+            distance_map[s_idx] = {
+                nb - off_s: d
+                for nb, d in dist.items()
+                if nb >= off_s and nb != start
+            }
+        return distance_map
+
     def build_sensor_hop_map(self, max_hops: int) -> dict:
         """Return {sensor_idx: frozenset(reachable_sensor_indices)} via BFS on static topology.
 

@@ -1,9 +1,29 @@
 import torch
 
 from src.data.dataset import LeakDBDataset
+from src.data.graph_builder import GraphBuilder
 from src.utils.config import Config
 
 SUPPORTED_METRICS = {'support', 'confidence', 'lift', 'zhang', 'coverage'}
+
+
+def annotate_hop_distances(rules: list[dict], gb: GraphBuilder) -> float | None:
+    """Add 'hop_distance' to each rule in place and return the average over rules with a finite distance.
+
+    hop_distance is the max physical hops from any antecedent sensor to the consequent sensor.
+    None means the consequent is unreachable from at least one antecedent via the physical topology.
+    """
+    dist_map = gb.build_sensor_distance_map()
+    for rule in rules:
+        con_st, con_sname, _ = rule['consequent']
+        con_idx = gb.sensor_idx[(con_st, con_sname)]
+        max_dist = max(
+            dist_map[gb.sensor_idx[(st, sname)]].get(con_idx, float('inf'))
+            for st, sname, _ in rule['antecedent']
+        )
+        rule['hop_distance'] = None if max_dist == float('inf') else int(max_dist)
+    hops = [r['hop_distance'] for r in rules if r['hop_distance'] is not None]
+    return round(sum(hops) / len(hops), 4) if hops else None
 
 
 class RuleEvaluator:
@@ -14,7 +34,8 @@ class RuleEvaluator:
         # float for matrix multiply; shape (n_rows, n_items)
         self.T = dataset.tensor.to(device).float()
 
-    def evaluate(self, rules: list[dict], metrics: list[str] = None) -> tuple[list[dict], dict]:
+    def evaluate(self, rules: list[dict], metrics: list[str] = None,
+                 min_support: float = None, min_confidence: float = None) -> tuple[list[dict], dict]:
         if metrics is None:
             metrics = list(SUPPORTED_METRICS)
         unknown = set(metrics) - SUPPORTED_METRICS
@@ -66,7 +87,8 @@ class RuleEvaluator:
                 rule['zhang'] = round(v, 4)
 
         if self.config.filter_rules:
-            rules = self._filter(rules, metrics)
+            rules = self._filter(rules, metrics,
+                                 min_support=min_support, min_confidence=min_confidence)
         rules.sort(key=lambda r: r.get('confidence', r.get('support', 0)), reverse=True)
         return rules, averages
 
@@ -134,12 +156,15 @@ class RuleEvaluator:
         )
         return torch.where(denom > 0, numerator / denom, torch.zeros_like(numerator))
 
-    def _filter(self, results: list[dict], metrics: list[str]) -> list[dict]:
+    def _filter(self, results: list[dict], metrics: list[str],
+                min_support: float = None, min_confidence: float = None) -> list[dict]:
+        ms = min_support if min_support is not None else self.config.min_support
+        mc = min_confidence if min_confidence is not None else self.config.min_confidence
         filtered = []
         for r in results:
-            if 'support' in metrics and r.get('support', 1) < self.config.min_support:
+            if 'support' in metrics and r.get('support', 1) < ms:
                 continue
-            if 'confidence' in metrics and r.get('confidence', 1) < self.config.min_confidence:
+            if 'confidence' in metrics and r.get('confidence', 1) < mc:
                 continue
             filtered.append(r)
         return filtered
