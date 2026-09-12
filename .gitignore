@@ -23,7 +23,7 @@ experiments/results/*
 !experiments/results/.gitkeep
 checkpoints/
 results/
-rules/
+/rules/
 visualizations/
 lib/
 
