@@ -24,6 +24,8 @@ class LeakDBDataset(Dataset):
 
     def __init__(self, config, transform=None):
         self.config = config
+
+        # the topology is static across scennarios and is therefore only once at initialization
         self.loader = LeakDBLoader(config.raw_data_dir)
         self.topology = self.loader.load_topology()
 
@@ -117,7 +119,7 @@ class LeakDBDataset(Dataset):
         disc_d = Discretizer(n_bins=self.config.n_bins, pooled=True).fit(train_df[d_cols])
         disc_d_df = disc_d.transform(df[d_cols])
 
-        # obtain the number of actual bins per type (can differ from what user specified)
+        # obtain the number of actual bins per type (n_bins can differ from what user specified)
         n_bins_per_type = {
             'pressure': disc_p.get_n_bins(),
             'flow':     disc_f.get_n_bins(),

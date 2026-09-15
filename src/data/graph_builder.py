@@ -39,8 +39,8 @@ class GraphBuilder:
         """
 
         # junction and reservoir indices derived from topology
-        junction_ids = [nid for nid, attrs in self.topology['nodes'].items() if attrs['type'] == 'junction']
-        reservoir_ids = [nid for nid, attrs in self.topology['nodes'].items() if attrs['type'] == 'reservoir']
+        junction_ids = [nid for nid, types in self.topology['nodes'].items() if types['type'] == 'junction']
+        reservoir_ids = [nid for nid, types in self.topology['nodes'].items() if types['type'] == 'reservoir']
         self.junction_idx = {nid: i for i, nid in enumerate(junction_ids)}
         self.reservoir_idx = {nid: i for i, nid in enumerate(reservoir_ids)}
 
@@ -100,27 +100,23 @@ class GraphBuilder:
         """
         junc_pipe_src, junc_pipe_dst = [], []
         res_pipe_src,  res_pipe_dst  = [], []
-        pipe_junc_src, pipe_junc_dst = [], []
-        pipe_res_src,  pipe_res_dst  = [], []
 
-        for pid, pipe_attrs in self.topology['pipes'].items():
+        for pid, pipe_endpoints in self.topology['pipes'].items():
             p = self.pipe_idx[pid]
             for endpoint in ('start_node', 'end_node'):
-                nid = pipe_attrs[endpoint]
+                nid = pipe_endpoints[endpoint]
                 if nid in self.junction_idx:
                     j = self.junction_idx[nid]
                     junc_pipe_src.append(j); junc_pipe_dst.append(p)
-                    pipe_junc_src.append(p); pipe_junc_dst.append(j)
                 else:
                     r = self.reservoir_idx[nid]
                     res_pipe_src.append(r); res_pipe_dst.append(p)
-                    pipe_res_src.append(p); pipe_res_dst.append(r)
 
         self.connected_edges = {
             ('junction',   'connected', 'pipe'):       self._ei(junc_pipe_src, junc_pipe_dst),
-            ('pipe',       'connected', 'junction'):   self._ei(pipe_junc_src, pipe_junc_dst),
+            ('pipe',       'connected', 'junction'):   self._ei(junc_pipe_dst, junc_pipe_src),
             ('reservoir',  'connected', 'pipe'):       self._ei(res_pipe_src,  res_pipe_dst),
-            ('pipe',       'connected', 'reservoir'):  self._ei(pipe_res_src,  pipe_res_dst),
+            ('pipe',       'connected', 'reservoir'):  self._ei(res_pipe_dst,  res_pipe_src),
         }
 
         # has_sensor: each junction/reservoir has one pressure + one demand sensor;
@@ -185,8 +181,12 @@ class GraphBuilder:
 
             if self.virtual_node_mode == 'type_interconnected':
                 n = len(self.SENSOR_TYPES)
-                tv_src = [i for i in range(n) for j in range(n) if i != j]
-                tv_dst = [j for i in range(n) for j in range(n) if i != j]
+                tv_src, tv_dst = [], []
+                for i in range(n):
+                    for j in range(n):
+                        if i != j:
+                            tv_src.append(i)
+                            tv_dst.append(j)
                 self.virtual_node_edges[('type_virtual', 'connected_to', 'type_virtual')] = self._ei(tv_src, tv_dst)
 
             elif self.virtual_node_mode == 'hierarchical':
@@ -224,7 +224,7 @@ class GraphBuilder:
         value_x = torch.zeros(self.n_value_nodes, 1 + len(self.SENSOR_TYPES))
         for (st, bin_idx), v_i in self.value_node_idx.items():
             n = self.n_bins_per_type[st]
-            value_x[v_i, 0] = bin_idx / max(n - 1, 1)
+            value_x[v_i, 0] = bin_idx / max(n - 1, 1)  # min-max scaling but xmin is left out because it is always 0.
             value_x[v_i, 1 + type_to_idx[st]] = 1.0
         self.value_node_x = value_x
 
