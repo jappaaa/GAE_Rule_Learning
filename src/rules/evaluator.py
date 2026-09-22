@@ -7,23 +7,35 @@ from src.utils.config import Config
 SUPPORTED_METRICS = {'support', 'confidence', 'lift', 'zhang', 'coverage'}
 
 
-def annotate_hop_distances(rules: list[dict], gb: GraphBuilder) -> float | None:
-    """Add 'hop_distance' to each rule in place and return the average over rules with a finite distance.
+def annotate_hop_distances(rules: list[dict], gb: GraphBuilder) -> dict | None:
+    """Add 'hop_distance_min' and 'hop_distance_max' to each rule in place.
 
-    hop_distance is the max physical hops from any antecedent sensor to the consequent sensor.
-    None means the consequent is unreachable from at least one antecedent via the physical topology.
+    For multi-item antecedents, min is the distance from the closest antecedent and max
+    from the furthest. For single-item antecedents both are equal. None for a rule means
+    the consequent is unreachable from at least one antecedent via the physical topology.
+    Returns the average min and max over rules with finite distances, or None if none exist.
     """
     dist_map = gb.build_sensor_distance_map()
     for rule in rules:
         con_st, con_sname, _ = rule['consequent']
         con_idx = gb.sensor_idx[(con_st, con_sname)]
-        max_dist = max(
+        dists = [
             dist_map[gb.sensor_idx[(st, sname)]].get(con_idx, float('inf'))
             for st, sname, _ in rule['antecedent']
-        )
-        rule['hop_distance'] = None if max_dist == float('inf') else int(max_dist)
-    hops = [r['hop_distance'] for r in rules if r['hop_distance'] is not None]
-    return round(sum(hops) / len(hops), 4) if hops else None
+        ]
+        if any(d == float('inf') for d in dists):
+            rule['hop_distance_min'] = None
+            rule['hop_distance_max'] = None
+        else:
+            rule['hop_distance_min'] = int(min(dists))
+            rule['hop_distance_max'] = int(max(dists))
+    finite = [r for r in rules if r['hop_distance_min'] is not None]
+    if not finite:
+        return None
+    return {
+        'avg_min': round(sum(r['hop_distance_min'] for r in finite) / len(finite), 4),
+        'avg_max': round(sum(r['hop_distance_max'] for r in finite) / len(finite), 4),
+    }
 
 
 class RuleEvaluator:

@@ -22,7 +22,7 @@ def _save_rules_output(evaluated_rules, averages, all_rules, run_dir, tag, confi
     rows = []
     for r in evaluated_rules:
         row = {'antecedent': str(r['antecedent']), 'consequent': str(r['consequent'])}
-        for k in ('support', 'support_ant', 'confidence', 'lift', 'zhang', 'hop_distance'):
+        for k in ('support', 'support_ant', 'confidence', 'lift', 'zhang', 'hop_distance_min', 'hop_distance_max'):
             if k in r:
                 row[k] = r[k]
         rows.append(row)
@@ -154,8 +154,11 @@ def main():
             print(f"Data coverage: {averages.get('coverage', 'n/a')}")
 
             if config.compute_hop_distance:
-                averages['avg_hop_distance'] = annotate_hop_distances(evaluated_rules, dataset.gb)
-                print(f"Average hop distance: {averages['avg_hop_distance']}")
+                hop_avgs = annotate_hop_distances(evaluated_rules, dataset.gb)
+                if hop_avgs:
+                    averages['avg_hop_distance_min'] = hop_avgs['avg_min']
+                    averages['avg_hop_distance_max'] = hop_avgs['avg_max']
+                    print(f"Average hop distance — min: {hop_avgs['avg_min']}  max: {hop_avgs['avg_max']}")
             _save_rules_output(evaluated_rules, averages, rules, run_dir, 'gae', config)
 
     if config.learn_rules_fp or config.evaluate_rules_fp:
@@ -207,8 +210,11 @@ def main():
                 print(f"  support={rule['support']:.3f} conf={rule['confidence']:.3f} lift={rule['lift']:.3f} zhang={rule['zhang']:.3f} | {rule['antecedent']} -> {rule['consequent']}")
 
             if config.compute_hop_distance:
-                fp_averages['avg_hop_distance'] = annotate_hop_distances(evaluated_fp_rules, dataset.gb)
-                print(f"Average hop distance: {fp_averages['avg_hop_distance']}")
+                hop_avgs = annotate_hop_distances(evaluated_fp_rules, dataset.gb)
+                if hop_avgs:
+                    fp_averages['avg_hop_distance_min'] = hop_avgs['avg_min']
+                    fp_averages['avg_hop_distance_max'] = hop_avgs['avg_max']
+                    print(f"Average hop distance — min: {hop_avgs['avg_min']}  max: {hop_avgs['avg_max']}")
             _save_rules_output(evaluated_fp_rules, fp_averages, fp_rules, run_dir, 'fp', config)
 
 
