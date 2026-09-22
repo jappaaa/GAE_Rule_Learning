@@ -4,6 +4,7 @@ import random
 
 import pandas as pd
 import torch
+from sklearn.preprocessing import RobustScaler
 from torch_geometric.data import Dataset
 
 from src.data.loader import LeakDBLoader
@@ -126,7 +127,27 @@ class LeakDBDataset(Dataset):
             'demand':   disc_d.get_n_bins(),
         }
 
-        # --- Step 4: build and save all graphs (scenario by scenario because each scenario has a different base graph) ---
+        # --- Step 4: load and normalize static node/pipe attributes ---
+        # load all included scenario attributes at once and fit a RobustScaler per attribute group
+        # over all (node/pipe, scenario) pairs — no leakage risk since attributes are static
+        # and every scenario is represented in the training set
+        attrs_dfs = self.loader.load_attributes_as_df(self.config.scenarios)
+        junc_df = attrs_dfs['junctions']  # index: (node_id, scenario), col: base_demand
+        pipe_df = attrs_dfs['pipes']      # index: (pipe_id, scenario), cols: length, diameter, roughness
+
+        if self.config.normalize_attributes:
+            junc_scaler = RobustScaler()
+            pipe_scaler = RobustScaler()
+            junc_df = pd.DataFrame(
+                junc_scaler.fit_transform(junc_df),
+                index=junc_df.index, columns=junc_df.columns,
+            )
+            pipe_df = pd.DataFrame(
+                pipe_scaler.fit_transform(pipe_df),
+                index=pipe_df.index, columns=pipe_df.columns,
+            )
+
+        # --- Step 5: build and save all graphs (scenario by scenario because each scenario has a different base graph) ---
         # instantiate a GraphBuilder instance
         gb = GraphBuilder(
             self.topology,
@@ -136,9 +157,10 @@ class LeakDBDataset(Dataset):
         )
 
         for scenario in self.config.scenarios:
-            # obtain the scenario-specific attributes, build the base graph, and save it
-            attrs = self.loader.load_attributes(scenario)
-            base = gb.build_base(attrs)
+            # slice the attributes for this scenario and build the base graph
+            junc_s = junc_df.xs(scenario, level='scenario')
+            pipe_s = pipe_df.xs(scenario, level='scenario')
+            base = gb.build_base(junc_s, pipe_s)
             torch.save(base, os.path.join(self.processed_dir, f'base_{scenario}.pt'))
 
             # iterate over all rows beloning to this scenario
@@ -148,8 +170,8 @@ class LeakDBDataset(Dataset):
                 graph = gb.build(
                     base,
                     disc_p_df.loc[graph_idx].rename(index=lambda c: c.split(';')[1]),   # type prefix is removed as the graph builder expects
-                    disc_f_df.loc[graph_idx].rename(index=lambda c: c.split(';')[1]),
-                    disc_d_df.loc[graph_idx].rename(index=lambda c: c.split(';')[1]),
+                    disc_f_df.loc[graph_idx].rename(index=lambda c: c.split(';')[1]),   # .loc returns series where column names became the index
+                    disc_d_df.loc[graph_idx].rename(index=lambda c: c.split(';')[1]),   # therefore index instead of columns are renamed
                 )
                 graph.y = torch.tensor([int(row['label'])], dtype=torch.long)
 
@@ -160,7 +182,7 @@ class LeakDBDataset(Dataset):
                     os.path.join(self.processed_dir, f'graph_{graph_idx}.pt'),
                 )
 
-        # --- Step 5: build and save one-hot transaction DataFrame (all rows) ---
+        # --- Step 6: build and save one-hot transaction DataFrame (all rows) ---
         hot_cols = {}
         for c in p_cols:
             for bin_idx in range(n_bins_per_type['pressure']):
@@ -175,7 +197,7 @@ class LeakDBDataset(Dataset):
         # one hot encoded df where column names are of format "sensor_type;node_name;bin_id"
         hot_df = pd.DataFrame(hot_cols, index=df.index)
 
-        # --- Step 6: save dataset DataFrame and metadata ---
+        # --- Step 7: save dataset DataFrame and metadata ---
         dataset_df = pd.concat([df[['scenario', 'split', 'label']], hot_df], axis=1)
         dataset_df.to_parquet(os.path.join(self.processed_dir, 'dataset.parquet'))
 

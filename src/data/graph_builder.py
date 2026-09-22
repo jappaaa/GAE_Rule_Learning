@@ -331,32 +331,31 @@ class GraphBuilder:
 
         return sensor_hop_map
 
-    def build_base(self, attributes: dict) -> HeteroData:
+    def build_base(self, junc_attrs: pd.DataFrame, pipe_attrs: pd.DataFrame) -> HeteroData:
         """Build the static HeteroData for one scenario (node features + static edges).
-        Called once per scenario; result is reused across all its timestamps."""
+        Called once per scenario; result is reused across all its timestamps.
+
+        Args:
+            junc_attrs: DataFrame indexed by node_id, column 'base_demand' (RobustScaler-normalized)
+            pipe_attrs: DataFrame indexed by pipe_id, columns 'length', 'diameter', 'roughness' (RobustScaler-normalized)
+        """
         data = HeteroData()
 
-        # junction: [elevation, base_demand]
-        junction_x = torch.zeros(len(self.junction_idx), 2)
+        # junction: [base_demand] — elevation excluded (constant 30 m across all scenarios)
+        junction_x = torch.zeros(len(self.junction_idx), 1)
         for nid, j in self.junction_idx.items():
-            attrs = attributes['junctions'][nid]
-            junction_x[j, 0] = attrs['elevation']
-            junction_x[j, 1] = attrs['base_demand']
+            junction_x[j, 0] = junc_attrs.loc[nid, 'base_demand']
         data['junction'].x = junction_x
 
-        # reservoir: [head]
-        reservoir_x = torch.zeros(len(self.reservoir_idx), 1)
-        for nid, r in self.reservoir_idx.items():
-            reservoir_x[r, 0] = attributes['reservoirs'][nid]['head']
-        data['reservoir'].x = reservoir_x
+        # reservoir: zeros placeholder — head excluded (constant 100 m across all scenarios)
+        data['reservoir'].x = torch.zeros(len(self.reservoir_idx), 1)
 
         # pipe: [length, diameter, roughness]
         pipe_x = torch.zeros(len(self.pipe_idx), 3)
         for pid, p in self.pipe_idx.items():
-            attrs = attributes['pipes'][pid]
-            pipe_x[p, 0] = attrs['length']
-            pipe_x[p, 1] = attrs['diameter']
-            pipe_x[p, 2] = attrs['roughness']
+            pipe_x[p, 0] = pipe_attrs.loc[pid, 'length']
+            pipe_x[p, 1] = pipe_attrs.loc[pid, 'diameter']
+            pipe_x[p, 2] = pipe_attrs.loc[pid, 'roughness']
         data['pipe'].x = pipe_x
 
         # sensor and value_node features are fixed across all scenarios

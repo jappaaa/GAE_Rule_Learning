@@ -6,6 +6,9 @@ import wntr
 
 
 class LeakDBLoader:
+    """Loads the topology and static attributes from the .inp waternetworks files using 
+    the wntr library. Additionally it contains a custom sensor data loader, that extracts
+    sensor data from the LeakDB folder"""
     def __init__(self, raw_data_dir: str):
         self.raw_data_dir = raw_data_dir
         base_inp_path = os.path.join(raw_data_dir, "LeakDB", "Hanoi_CMH", "Hanoi_CMH", "Hanoi_CMH.inp")
@@ -33,14 +36,15 @@ class LeakDBLoader:
 
     def load_attributes(self, scenario: int) -> dict:
         """Parse static node and pipe attributes from the scenario-specific .inp file.
-        Returns junction attributes (elevation, base demand) and pipe attributes
-        (length, diameter, roughness)."""
+        Returns junction attributes (base_demand), reservoir attributes (head), and pipe
+        attributes (length, diameter, roughness). Junction elevation is excluded — constant
+        at 30 m across all scenarios. Reservoir head is included but not used as a node
+        feature — constant at 100 m across all scenarios."""
         scenario_inp_path = os.path.join(self.raw_data_dir, "LeakDB", "Hanoi_CMH", "Hanoi_CMH", f"Scenario-{scenario}", f"Hanoi_CMH_Scenario-{scenario}.inp")
         scenario_wn = wntr.network.WaterNetworkModel(scenario_inp_path)
 
         junctions = {
             n: {
-                "elevation": scenario_wn.get_node(n).elevation,
                 "base_demand": scenario_wn.get_node(n).base_demand,
             }
             for n in scenario_wn.junction_name_list
@@ -83,7 +87,6 @@ class LeakDBLoader:
                 junction_records.append({
                     "node_id": node_id,
                     "scenario": scenario,
-                    "elevation": node_attrs["elevation"],
                     "base_demand": node_attrs["base_demand"],
                 })
 
