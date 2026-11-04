@@ -7,7 +7,7 @@ import torch
 from sklearn.preprocessing import RobustScaler
 from torch_geometric.data import Dataset
 
-from src.data.loader import LeakDBLoader
+from src.data.leakdb.loader import LeakDBLoader
 from src.data.discretizer import Discretizer
 from src.data.graph_builder import GraphBuilder
 
@@ -55,6 +55,7 @@ class LeakDBDataset(Dataset):
             self.n_bins_per_type,
             bidirectional=config.bidirectional_has_measure,
             virtual_node_mode=config.virtual_node_mode,
+            onehot_bin_features=config.onehot_bin_features,
         )
 
     @property
@@ -63,7 +64,7 @@ class LeakDBDataset(Dataset):
 
     @property
     def processed_file_names(self):
-        return ['dataset.parquet', 'metadata.json'] + [f'base_{s}.pt' for s in self.config.scenarios]
+        return ['dataset.parquet', 'dataset_categorical.parquet', 'metadata.json'] + [f'base_{s}.pt' for s in self.config.scenarios]
 
     def process(self):
         # --- Step 1: build tabular sensor DataFrame (one row per timestamp, one column per sensor) ---
@@ -79,7 +80,7 @@ class LeakDBDataset(Dataset):
             demands   = sd['demands'].iloc[:n_t].rename(columns=lambda c: f'demand;{c}')
             label_col = sd['labels'].iloc[:n_t, 0].astype(int).rename('label')
 
-            # concatenat the dfs column wise to have all sensor data from a scenario in one df and add a column specifying the scenario number
+            # concatenate the dfs column wise to have all sensor data from a scenario in one df and add a column specifying the scenario number
             df_s = pd.concat([pressures, flows, demands, label_col], axis=1)
             df_s['scenario'] = scenario
             scenario_dfs.append(df_s)
@@ -90,7 +91,7 @@ class LeakDBDataset(Dataset):
         # --- Step 2: shuffle and split train/val ---
         # shuffle the df indices and create a new df using that order
         n = len(df)
-        rng = random.Random(self.config.random_seed)
+        rng = random.Random(self.config.data_seed)  # kept separate from random_seed so varying the model seed across runs never resamples the split
         shuffled_idx = list(range(n))
         rng.shuffle(shuffled_idx)
         df = df.iloc[shuffled_idx].reset_index(drop=True)
@@ -154,6 +155,7 @@ class LeakDBDataset(Dataset):
             n_bins_per_type,
             bidirectional=self.config.bidirectional_has_measure,
             virtual_node_mode=self.config.virtual_node_mode,
+            onehot_bin_features=self.config.onehot_bin_features,
         )
 
         for scenario in self.config.scenarios:
@@ -182,7 +184,7 @@ class LeakDBDataset(Dataset):
                     os.path.join(self.processed_dir, f'graph_{graph_idx}.pt'),
                 )
 
-        # --- Step 6: build and save one-hot transaction DataFrame (all rows) ---
+        # --- Step 6: build and save one-hot transaction DataFrame (all rows), along with the discretized categorical version ---
         hot_cols = {}
         for c in p_cols:
             for bin_idx in range(n_bins_per_type['pressure']):
@@ -197,9 +199,17 @@ class LeakDBDataset(Dataset):
         # one hot encoded df where column names are of format "sensor_type;node_name;bin_id"
         hot_df = pd.DataFrame(hot_cols, index=df.index)
 
-        # --- Step 7: save dataset DataFrame and metadata ---
+        # categorical (non-one-hot) counterpart: one column per sensor, named "sensor_type;node_name", valued with
+        # the discretized bin index. hot_df above is derived from exactly these three frames, so this is the
+        # natural source format for baselines that expect discretized-but-not-one-hot input (e.g. Aerial)
+        cat_df = pd.concat([disc_p_df, disc_f_df, disc_d_df], axis=1)
+
+        # --- Step 7: save dataset DataFrames and metadata ---
         dataset_df = pd.concat([df[['scenario', 'split', 'label']], hot_df], axis=1)
         dataset_df.to_parquet(os.path.join(self.processed_dir, 'dataset.parquet'))
+
+        dataset_cat_df = pd.concat([df[['scenario', 'split', 'label']], cat_df], axis=1)
+        dataset_cat_df.to_parquet(os.path.join(self.processed_dir, 'dataset_categorical.parquet'))
 
         with open(os.path.join(self.processed_dir, 'metadata.json'), 'w') as f:
             json.dump({
