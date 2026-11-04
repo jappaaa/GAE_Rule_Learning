@@ -26,6 +26,7 @@ class GraphAutoEncoder(nn.Module):
                 config.latent_channels,
                 config.num_layers,
                 config.encoder_type,
+                config.norm_type,
             )
             self.encoder = to_hetero(encoder, metadata, aggr=config.aggr)
         else:
@@ -38,6 +39,10 @@ class GraphAutoEncoder(nn.Module):
                 config.encoder_type,
                 metadata,
                 aggr=config.aggr,
+                norm_type=config.norm_type,
+                gat_for_sensor_virtual=config.gat_for_sensor_virtual,
+                use_input_projection=config.use_input_projection,
+                value_node_projection_only=config.value_node_projection_only,
             )
         self.decoder = InnerProductDecoder()
         self.gb = graph_builder
