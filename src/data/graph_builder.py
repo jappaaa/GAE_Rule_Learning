@@ -1,3 +1,5 @@
+from collections import defaultdict
+
 import pandas as pd
 import torch
 from torch_geometric.data import HeteroData
@@ -15,18 +17,21 @@ class GraphBuilder:
 
     SENSOR_TYPES = ['pressure', 'flow', 'demand']
 
-    def __init__(self, topology: dict, n_bins_per_type: dict, bidirectional: bool = False, virtual_node_mode: str = 'none'):
+    def __init__(self, topology: dict, n_bins_per_type: dict, bidirectional: bool = False,
+                 virtual_node_mode: str = 'none', onehot_bin_features: bool = True):
         """
         Args:
             topology: output of LeakDBLoader.load_topology()
             n_bins_per_type: actual number of bins per sensor type after fitting,
                              e.g. {'pressure': 3, 'flow': 3, 'demand': 3}
             bidirectional: if True, has_measure edges are added in both directions
+            onehot_bin_features: if True, value_node bin feature is one-hot; if False, normalized scalar
         """
         self.topology = topology
         self.n_bins_per_type = n_bins_per_type
         self.bidirectional = bidirectional
         self.virtual_node_mode = virtual_node_mode
+        self.onehot_bin_features = onehot_bin_features
 
         self._build_node_indices()
         self._build_static_edges()
@@ -208,7 +213,7 @@ class GraphBuilder:
         """Build fixed node feature tensors for sensor and value_node types.
 
         sensor features        (n_sensors,          n_sensor_types): one-hot sensor type
-        value_node feats       (n_value_nodes,      n_sensor_types+1): [normalized_bin_idx, one-hot sensor type]
+        value_node feats       (n_value_nodes,      max_bins+n_sensor_types) or (n_value_nodes, 1+n_sensor_types): [one-hot or scalar bin_idx, one-hot sensor type]
         type_virtual feats     (n_sensor_types,     n_sensor_types): one-hot sensor type (same encoding as sensor)
         global_virtual feats   (1,                  1): zero initialization (identity derived from aggregation)
         """
@@ -220,12 +225,21 @@ class GraphBuilder:
             sensor_x[s_i, type_to_idx[st]] = 1.0
         self.sensor_x = sensor_x
 
-        # value_node: [normalized bin idx, one-hot type] — shape (n_value_nodes, 4)
-        value_x = torch.zeros(self.n_value_nodes, 1 + len(self.SENSOR_TYPES))
-        for (st, bin_idx), v_i in self.value_node_idx.items():
-            n = self.n_bins_per_type[st]
-            value_x[v_i, 0] = bin_idx / max(n - 1, 1)  # min-max scaling but xmin is left out because it is always 0.
-            value_x[v_i, 1 + type_to_idx[st]] = 1.0
+        # value_node features — two modes controlled by onehot_bin_features:
+        #   True:  one-hot bin  + one-hot type — shape (n_value_nodes, max_bins + n_sensor_types)
+        #   False: scalar bin   + one-hot type — shape (n_value_nodes, 1 + n_sensor_types)
+        if self.onehot_bin_features:
+            max_bins = max(self.n_bins_per_type.values())
+            value_x = torch.zeros(self.n_value_nodes, max_bins + len(self.SENSOR_TYPES))
+            for (st, bin_idx), v_i in self.value_node_idx.items():
+                value_x[v_i, bin_idx] = 1.0                          # one-hot bin position
+                value_x[v_i, max_bins + type_to_idx[st]] = 1.0      # one-hot sensor type
+        else:
+            value_x = torch.zeros(self.n_value_nodes, 1 + len(self.SENSOR_TYPES))
+            for (st, bin_idx), v_i in self.value_node_idx.items():
+                n = self.n_bins_per_type[st]
+                value_x[v_i, 0] = bin_idx / max(n - 1, 1)           # min-max normalized scalar
+                value_x[v_i, 1 + type_to_idx[st]] = 1.0             # one-hot sensor type
         self.value_node_x = value_x
 
         if self.virtual_node_mode in ('hierarchical', 'hierarchical_direct', 'type_interconnected'):
@@ -238,31 +252,56 @@ class GraphBuilder:
             self.global_virtual_x = torch.zeros(1, 1)
 
     def build_sensor_distance_map(self) -> dict:
-        """Return {sensor_idx: {other_sensor_idx: hop_distance}} via BFS on static topology.
+        """Return {sensor_idx: {other_sensor_idx: network_hop_distance}}.
 
-        Uses connected + has_sensor/located_at edges only, same as build_sensor_hop_map.
-        No hop limit — returns actual distances to all reachable sensors.
+        Distance is the shortest path between sensor *location nodes* (junctions/pipes)
+        in the water network graph, traversing only connected edges:
+          0 = co-located sensors (same junction or pipe)
+          1 = directly connected locations (junction ↔ adjacent pipe)
+          2 = two steps apart (junction → pipe → junction)
+        This is more interpretable than raw graph hops because it counts structural
+        water network components rather than PyG graph edges.
+        Note: build_sensor_hop_map uses raw graph hops — kept separate because it
+        serves the GNN receptive field filter where graph layers are the natural unit.
         """
         n_j = len(self.junction_idx)
         n_r = len(self.reservoir_idx)
-        n_p = len(self.pipe_idx)
         off_r = n_j
         off_p = n_j + n_r
-        off_s = n_j + n_r + n_p
-        total = off_s + self.n_sensors
+        n_network_nodes = off_p + len(self.pipe_idx)
 
-        type_off = {'junction': 0, 'reservoir': off_r, 'pipe': off_p, 'sensor': off_s}
+        type_off = {'junction': 0, 'reservoir': off_r, 'pipe': off_p}
 
-        adj = [[] for _ in range(total)]
-        for (src_type, _, dst_type), ei in {**self.connected_edges, **self.has_sensor_edges}.items():
-            o_src = type_off[src_type]
-            o_dst = type_off[dst_type]
+        # adjacency on network nodes only — no sensor nodes, no measured_by edges
+        adj = [[] for _ in range(n_network_nodes)]
+        for (src_type, _, dst_type), ei in self.connected_edges.items():
+            if src_type not in type_off or dst_type not in type_off:
+                continue
+            o_src, o_dst = type_off[src_type], type_off[dst_type]
             for s, d in zip(ei[0].tolist(), ei[1].tolist()):
                 adj[o_src + s].append(o_dst + d)
 
+        # map each sensor to its location node (junction or pipe)
+        sensor_location = {}  # sensor_idx -> global network node index
+        for (src_type, _, dst_type), ei in self.has_sensor_edges.items():
+            if dst_type != 'sensor' or src_type not in type_off:
+                continue
+            o_src = type_off[src_type]
+            for loc, s in zip(ei[0].tolist(), ei[1].tolist()):
+                sensor_location[s] = o_src + loc
+
+        # reverse: network node -> list of sensors at that location
+        loc_to_sensors = defaultdict(list)
+        for s_idx, loc in sensor_location.items():
+            loc_to_sensors[loc].append(s_idx)
+
+        # BFS from each sensor's location through the water network
         distance_map = {}
         for s_idx in range(self.n_sensors):
-            start = off_s + s_idx
+            if s_idx not in sensor_location:
+                distance_map[s_idx] = {}
+                continue
+            start = sensor_location[s_idx]
             dist = {start: 0}
             queue = [start]
             qi = 0
@@ -273,9 +312,10 @@ class GraphBuilder:
                         dist[nb] = dist[node] + 1
                         queue.append(nb)
             distance_map[s_idx] = {
-                nb - off_s: d
-                for nb, d in dist.items()
-                if nb >= off_s and nb != start
+                other_s: d
+                for loc, d in dist.items()
+                for other_s in loc_to_sensors.get(loc, [])
+                if other_s != s_idx
             }
         return distance_map
 
