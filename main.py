@@ -1,21 +1,32 @@
 import copy
 import dataclasses
 import json
+import time
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
 import torch
 
-from src.data.dataset import LeakDBDataset
+from src.data.leakdb.dataset import LeakDBDataset
 from src.model.gae import GraphAutoEncoder
 from src.training.trainer import Trainer
 from src.training.masking import Masker
 from src.rules.extractor import RuleExtractor
-from src.rules.fp_extractor import FPExtractor
+from baselines.fp_growth.fp_extractor import FPExtractor
 from src.rules.evaluator import RuleEvaluator, annotate_hop_distances
 from src.utils.config import Config
 from src.utils.visualize import visualize_graph
+
+# Implements the context manager to time components
+@contextmanager
+def _timer(label: str, timings: dict):
+    start = time.perf_counter()
+    yield
+    elapsed = time.perf_counter() - start
+    timings[label] = elapsed
+    print(f"  [{label}] {elapsed:.1f}s")
 
 
 def _save_rules_output(evaluated_rules, averages, all_rules, run_dir, tag, config):
@@ -51,20 +62,35 @@ def main():
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
 
+    # Eliminate ranomness to ensure reproducibility
+    torch.manual_seed(config.random_seed)   # remove randomness from torch, e.g., model parameter initialization
+    torch.cuda.manual_seed_all(config.random_seed)  # remove randomness from cuda GPU
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    torch.use_deterministic_algorithms(True, warn_only=True)
+
+    timings = {}
+    total_start = time.perf_counter()
+
     print("Loading dataset...")
-    dataset = LeakDBDataset(config)
+    with _timer("dataset loading", timings):
+        dataset = LeakDBDataset(config)
     print(f"Dataset ready — {len(dataset)} graphs | {len(dataset.train_indices)} train / {len(dataset.val_indices)} val")
 
-    print("Initialising model...")
+    timestamp = datetime.now().isoformat(timespec='seconds')
+    run_dir = Path(config.results_dir) / f"run_{timestamp.replace(':', '-')}"
+    run_dir.mkdir(parents=True, exist_ok=True)
+
     sample = dataset[0]
     model = GraphAutoEncoder(config, sample.metadata(), dataset.gb)
     model.to(device)
-    print("Model ready")
 
     if config.train_model:
-        print("Starting training...")
-        trainer = Trainer(model, dataset, config, device)
-        trainer.train()
+        config.checkpoint_path = str(run_dir / 'best_model.pt')
+        print("Starting model training...")
+        with _timer("model training", timings):
+            trainer = Trainer(model, dataset, config, device)
+            trainer.train()
         print("Training complete")
 
     print(f"Loading best checkpoint from {config.checkpoint_path}...")
@@ -104,15 +130,12 @@ def main():
 
     model.eval()
 
-    timestamp = datetime.now().isoformat(timespec='seconds')
-    run_dir = Path(config.results_dir) / f"run_{timestamp.replace(':', '-')}"
-    run_dir.mkdir(parents=True, exist_ok=True)
-
     if config.learn_rules or config.evaluate_rules:
         if config.learn_rules:
             print("Extracting rules...")
-            extractor = RuleExtractor(model, dataset.gb, dataset, config, device)
-            rules = extractor.extract()
+            with _timer("GAE rule extraction", timings):
+                extractor = RuleExtractor(model, dataset.gb, dataset, config, device)
+                rules = extractor.extract()
             print(f"Extraction complete — {len(rules)} candidate rules")
             Path(config.rules_path).parent.mkdir(parents=True, exist_ok=True)
             with open(config.rules_path, 'w') as f:
@@ -142,8 +165,9 @@ def main():
 
         if config.evaluate_rules:
             print("Evaluating GAE rules...")
-            evaluator = RuleEvaluator(dataset, config, device)
-            evaluated_rules, averages = evaluator.evaluate(rules)
+            with _timer("GAE rule evaluation", timings):
+                evaluator = RuleEvaluator(dataset, config, device, split='train')
+                evaluated_rules, averages = evaluator.evaluate(rules)
             if config.filter_rules:
                 print(f"Evaluation complete — {len(evaluated_rules)} rules pass support>={config.min_support} and confidence>={config.min_confidence}")
             else:
@@ -164,8 +188,9 @@ def main():
     if config.learn_rules_fp or config.evaluate_rules_fp:
         if config.learn_rules_fp:
             print("Extracting rules via FP-growth...")
-            fp_extractor = FPExtractor(dataset, config)
-            fp_rules = fp_extractor.extract()
+            with _timer("FP-growth rule extraction", timings):
+                fp_extractor = FPExtractor(dataset, config)
+                fp_rules = fp_extractor.extract()
             print(f"FP-growth extraction complete — {len(fp_rules)} candidate rules")
             Path(config.rules_path_fp).parent.mkdir(parents=True, exist_ok=True)
             with open(config.rules_path_fp, 'w') as f:
@@ -195,12 +220,13 @@ def main():
 
         if config.evaluate_rules_fp:
             print("Evaluating FP-growth rules...")
-            fp_evaluator = RuleEvaluator(dataset, config, device)
-            evaluated_fp_rules, fp_averages = fp_evaluator.evaluate(
-                fp_rules,
-                min_support=config.min_support_fp,
-                min_confidence=config.min_confidence_fp,
-            )
+            with _timer("FP-growth rule evaluation", timings):
+                fp_evaluator = RuleEvaluator(dataset, config, device, split='train')
+                evaluated_fp_rules, fp_averages = fp_evaluator.evaluate(
+                    fp_rules,
+                    min_support=config.min_support_fp,
+                    min_confidence=config.min_confidence_fp,
+                )
             if config.filter_rules:
                 print(f"FP evaluation complete — {len(evaluated_fp_rules)} rules pass support>={config.min_support} and confidence>={config.min_confidence}")
             else:
@@ -216,6 +242,13 @@ def main():
                     fp_averages['avg_hop_distance_max'] = hop_avgs['avg_max']
                     print(f"Average hop distance — min: {hop_avgs['avg_min']}  max: {hop_avgs['avg_max']}")
             _save_rules_output(evaluated_fp_rules, fp_averages, fp_rules, run_dir, 'fp', config)
+
+    timings['total'] = time.perf_counter() - total_start
+    print("\n--- Timing summary ---")
+    for label, elapsed in timings.items():
+        print(f"  {label:<35} {elapsed:>7.1f}s")
+    with open(run_dir / 'timings.json', 'w') as f:
+        json.dump(timings, f, indent=2)
 
 
 if __name__ == "__main__":
