@@ -4,7 +4,7 @@ import pandas as pd
 from mlxtend.frequent_patterns import fpgrowth, association_rules
 from tqdm import tqdm
 
-from src.data.dataset import LeakDBDataset
+from src.data.leakdb.dataset import LeakDBDataset
 from src.utils.config import Config
 
 
@@ -24,9 +24,13 @@ class FPExtractor:
     def extract(self) -> list[dict]:
         items = self.dataset.items  # list of (st, sname, bin_idx)
 
+        # mine from the train split only, matching every other method (GAE/RuleNaps/Aerial train only on
+        # train rows); otherwise FP-growth would be the only method whose rules are shaped by val data too
+        train_df = self.dataset.df[self.dataset.df['split'] == 'train']
+
         # mlxtend fpgrowth expects a bool DataFrame; column names are used as item labels
         item_cols = [c for c in self.dataset.df.columns if c not in ('scenario', 'split', 'label')]
-        bool_df = self.dataset.df[item_cols].astype(bool)
+        bool_df = train_df[item_cols].astype(bool)
 
         print(f"  Mining frequent itemsets (min_support={self.config.min_support_fp}, max_len={self.config.max_antecedent_size + 1})...")
         t0 = time.time()
