@@ -7,7 +7,7 @@ from torch_geometric.loader import DataLoader
 from torch.utils.data import SubsetRandomSampler
 
 from src.model.gae import GraphAutoEncoder
-from src.data.dataset import LeakDBDataset
+from src.data.leakdb.dataset import LeakDBDataset
 from src.training.masking import Masker
 from src.utils.config import Config
 
@@ -18,8 +18,6 @@ class Trainer:
         self.dataset = dataset
         self.config = config
         self.device = device
-
-        torch.manual_seed(config.random_seed)
 
         self.optimizer = torch.optim.Adam(model.parameters(), lr=config.lr)
 
@@ -32,7 +30,6 @@ class Trainer:
             sampler=SubsetRandomSampler(dataset.val_indices),
         )
 
-        Path("checkpoints").mkdir(parents=True, exist_ok=True)
         self.masker = Masker(model.gb, config)
         
 
@@ -144,12 +141,17 @@ class Trainer:
     
 
     def _save_checkpoint(self, epoch: int, val_loss: float):
-        torch.save({
+        state = {
             'epoch': epoch,
             'val_loss': val_loss,
             'model_state_dict': self.model.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
-        }, 'checkpoints/best_model.pt')
+        }
+        torch.save(state, self.config.checkpoint_path)
+        # also keep a copy as the latest best model for subsequent runs
+        fallback = Path('checkpoints') / 'best_model.pt'
+        fallback.parent.mkdir(parents=True, exist_ok=True)
+        torch.save(state, fallback)
 
 
     def load_checkpoint(self, path: str):
