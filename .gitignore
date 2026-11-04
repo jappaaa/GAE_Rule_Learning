@@ -12,20 +12,27 @@ venv/
 # Jupyter
 .ipynb_checkpoints/
 
-# Data — keep raw and processed data local only
-data/raw/*
-data/processed/*
-!data/raw/.gitkeep
-!data/processed/.gitkeep
+# Data — keep raw and processed data local only (data/<dataset_name>/{raw,processed})
+data/*/raw/*
+data/*/processed/*
+!data/*/raw/.gitkeep
+!data/*/processed/.gitkeep
 
 # Experiment outputs
 experiments/results/*
 !experiments/results/.gitkeep
 checkpoints/
 results/
+old_results/
 /rules/
 visualizations/
 lib/
+
+# Vendored baseline repos — copied without .git/license, not ours to publish (see SOURCE.md)
+baselines/rulenaps/
+
+# Private planning notes
+docs/
 
 # IDE
 .vscode/
