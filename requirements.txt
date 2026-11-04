@@ -5,4 +5,5 @@ mlxtend
 numpy
 wntr
 pyvis
+huggingface_hub
 
