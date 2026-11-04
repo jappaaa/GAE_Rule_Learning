@@ -1,10 +1,10 @@
 import torch
 
-from src.data.dataset import LeakDBDataset
+from src.data.leakdb.dataset import LeakDBDataset
 from src.data.graph_builder import GraphBuilder
 from src.utils.config import Config
 
-SUPPORTED_METRICS = {'support', 'confidence', 'lift', 'zhang', 'coverage'}
+SUPPORTED_METRICS = {'support', 'confidence', 'lift', 'zhang', 'coverage', 'confidence_zhang'}
 
 
 def annotate_hop_distances(rules: list[dict], gb: GraphBuilder) -> dict | None:
@@ -14,6 +14,9 @@ def annotate_hop_distances(rules: list[dict], gb: GraphBuilder) -> dict | None:
     from the furthest. For single-item antecedents both are equal. None for a rule means
     the consequent is unreachable from at least one antecedent via the physical topology.
     Returns the average min and max over rules with finite distances, or None if none exist.
+
+    Assumes a single-item consequent (unlike RuleEvaluator.evaluate, which also accepts a list);
+    pass compute_hop_distance=False for rules with an unsplit, multi-item consequent.
     """
     dist_map = gb.build_sensor_distance_map()
     for rule in rules:
@@ -39,12 +42,28 @@ def annotate_hop_distances(rules: list[dict], gb: GraphBuilder) -> dict | None:
 
 
 class RuleEvaluator:
-    def __init__(self, dataset: LeakDBDataset, config: Config, device: torch.device):
+    def __init__(self, dataset: LeakDBDataset, config: Config, device: torch.device, split: str = 'train'):
+        """split selects which rows of dataset.tensor to evaluate against: 'train' (default) evaluates rules on
+        exactly the rows they were mined from, keeping 'val' free for a held-out signal (e.g. RuleNaps'
+        validation loss) elsewhere instead of mixing it into this comparison. 'all' evaluates on every row.
+        """
+        if split not in ('train', 'val', 'all'):
+            raise ValueError(f"split must be one of 'train', 'val', 'all', got {split!r}")
         self.config = config
         self.device = device
         self.item_to_col = {item: col for col, item in enumerate(dataset.items)}
-        # float for matrix multiply; shape (n_rows, n_items)
-        self.T = dataset.tensor.to(device).float()
+        row_indices = {'train': dataset.train_indices, 'val': dataset.val_indices, 'all': None}[split]
+        tensor = dataset.tensor if row_indices is None else dataset.tensor[row_indices]
+        self.transactions = tensor.to(device).float()  # (n_transactions, n_items)
+
+    def _consequent_cols(self, consequent) -> list[int]:
+        """Column index(es) of a rule's consequent: a single item tuple, or a list of items (unsplit, multi-item
+        consequent) treated as a conjunction, same as the antecedent. support/confidence/lift/zhang already treat
+        antecedent and consequent columns identically, so this is the only place that needs to know the difference.
+        """
+        if isinstance(consequent[0], (tuple, list)):
+            return [self.item_to_col[tuple(i)] for i in consequent]
+        return [self.item_to_col[tuple(consequent)]]
 
     def evaluate(self, rules: list[dict], metrics: list[str] = None,
                  min_support: float = None, min_confidence: float = None) -> tuple[list[dict], dict]:
@@ -57,7 +76,7 @@ class RuleEvaluator:
         # One Python pass to extract column indices per rule — avoids building three large
         # (n_rules, n_items) mask tensors upfront, which would be gigabytes for millions of rules
         ant_cols  = [[self.item_to_col[tuple(i)] for i in r['antecedent']] for r in rules]
-        con_cols  = [[self.item_to_col[tuple(r['consequent'])]] for r in rules]
+        con_cols  = [self._consequent_cols(r['consequent']) for r in rules]
         full_cols = [a + c for a, c in zip(ant_cols, con_cols)]
 
         averages = {}
@@ -70,20 +89,23 @@ class RuleEvaluator:
             for rule, v in zip(rules, support_full.tolist()):
                 rule['support'] = round(v, 4)
 
-        if 'confidence' in metrics or 'lift' in metrics or 'zhang' in metrics or 'coverage' in metrics:
+        needs_confidence = 'confidence' in metrics or 'lift' in metrics or 'zhang' in metrics or 'confidence_zhang' in metrics
+        needs_zhang = 'zhang' in metrics or 'confidence_zhang' in metrics
+
+        if needs_confidence or 'coverage' in metrics:
             support_ant, covered = self._compute_support(ant_cols, track_coverage='coverage' in metrics)
             averages['support_ant'] = round(support_ant.mean().item(), 4)
             for rule, v in zip(rules, support_ant.tolist()):
                 rule['support_ant'] = round(v, 4)
             if 'coverage' in metrics:
                 averages['coverage'] = round(covered.float().mean().item(), 4)
-            if 'confidence' in metrics or 'lift' in metrics or 'zhang' in metrics:
+            if needs_confidence:
                 confidence = self._compute_confidence(support_full, support_ant)
                 averages['confidence'] = round(confidence.mean().item(), 4)
                 for rule, v in zip(rules, confidence.tolist()):
                     rule['confidence'] = round(v, 4)
 
-        if 'lift' in metrics or 'zhang' in metrics:
+        if 'lift' in metrics or needs_zhang:
             support_con, _ = self._compute_support(con_cols)
 
         if 'lift' in metrics:
@@ -92,11 +114,19 @@ class RuleEvaluator:
             for rule, v in zip(rules, lift.tolist()):
                 rule['lift'] = round(v, 4)
 
-        if 'zhang' in metrics:
+        if needs_zhang:
             zhang = self._compute_zhang(support_full, support_ant, support_con)
             averages['zhang'] = round(zhang.mean().item(), 4)
             for rule, v in zip(rules, zhang.tolist()):
                 rule['zhang'] = round(v, 4)
+
+        if 'confidence_zhang' in metrics:
+            # per-rule product, then averaged — not avg(confidence) * avg(zhang): that would only need the
+            # two averages above and could score well even if no single rule is good on both axes at once
+            confidence_zhang = confidence * zhang
+            averages['confidence_zhang'] = round(confidence_zhang.mean().item(), 4)
+            for rule, v in zip(rules, confidence_zhang.tolist()):
+                rule['confidence_zhang'] = round(v, 4)
 
         if self.config.filter_rules:
             rules = self._filter(rules, metrics,
@@ -113,7 +143,7 @@ class RuleEvaluator:
         chunk_size × items_per_rule down to 1.
         """
         c = len(rule_cols_chunk)
-        n_items = self.T.shape[1]
+        n_items = self.transactions.shape[1]
 
         row_idx, col_idx = [], []
 
@@ -138,13 +168,13 @@ class RuleEvaluator:
         chunks — O(n_test) memory — indicating which transactions are covered by at least one
         rule. Returns (support, covered); covered is None when track_coverage=False.
         """
-        n_test = self.T.shape[0]
+        n_test = self.transactions.shape[0]
         parts = []
         covered = torch.zeros(n_test, dtype=torch.bool, device=self.device) if track_coverage else None
 
         for start in range(0, len(rule_cols), chunk_size):
             m = self._build_masks(rule_cols[start:start + chunk_size])
-            counts    = self.T @ m.float().T     # (n_test, c)
+            counts    = self.transactions @ m.float().T     # (n_test, c)
             required  = m.float().sum(dim=1)     # (c,)
             satisfied = counts == required        # (n_test, c) bool
             if track_coverage:
