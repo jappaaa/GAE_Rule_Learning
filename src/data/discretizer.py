@@ -75,15 +75,17 @@ class Discretizer:
 
     def transform(self, df: pd.DataFrame) -> pd.DataFrame:
         """Map continuous values to integer bin indices (0 to n_bins-1)."""
-        # create new dataframe to store binned values
-        disc_df = pd.DataFrame(index=df.index)
+        # collect binned columns in a dict and build the DataFrame in one go -- assigning into an
+        # already-existing DataFrame column by column (disc_df[col] = ...) leaves each column as
+        # its own internal block, which gets very slow once there are hundreds of columns
+        binned = {}
 
         # for each column in the dataframe discretize the values, using either the pooled bins, or column specific bins. NaN values are not assigned to a bin.
         for col in df.columns:
             edges = self._bin_edges["__pooled__"] if self.pooled else self._bin_edges[col]
-            disc_df[col] = pd.cut(df[col], bins=edges, labels=False) # use labels=False to return bin indices 
+            binned[col] = pd.cut(df[col], bins=edges, labels=False) # use labels=False to return bin indices
 
-        return disc_df
+        return pd.DataFrame(binned, index=df.index)
 
 
     def fit_transform(self, df: pd.DataFrame) -> pd.DataFrame:
