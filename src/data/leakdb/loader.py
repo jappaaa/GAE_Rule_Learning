@@ -111,7 +111,11 @@ class LeakDBLoader:
     def load_sensor_data(self, scenario: int) -> dict[str, pd.DataFrame]:
         """Read pressure, flow, and demand CSVs for a given scenario.
         Returns a dict with keys 'pressures', 'flows', 'demands', each a DataFrame
-        with timestamps as index and node/pipe IDs as columns."""
+        with timestamps as index and bare node/pipe IDs as columns (matching
+        load_topology()'s ids directly — the raw files are named "Node_<id>.csv"/
+        "Link_<id>.csv", but that "Node_"/"Link_" tag is dropped here rather than kept
+        as part of the id, since GraphBuilder's sensor_idx already disambiguates
+        node-measured vs link-measured sensors via the signal type itself)."""
 
         sensor_types = ["Pressures", "Flows", "Demands"]
         scenario_dir = Path(self.raw_data_dir, "LeakDB", "Hanoi_CMH", "Hanoi_CMH", f"Scenario-{scenario}")
@@ -124,7 +128,7 @@ class LeakDBLoader:
 
             for path in sorted(sensor_type_dir.iterdir()):
                 df = pd.read_csv(path)
-                sensor_place = path.stem.lower()
+                sensor_place = path.stem.split('_', 1)[1]  # "Node_1"/"Link_1" -> "1"
                 df.rename(columns={"Value": sensor_place}, inplace=True)
                 df.set_index("Timestamp", inplace=True)
                 dfs.append(df)

@@ -81,7 +81,10 @@ class GraphBuilder:
 
         # sensor indices: self.SENSOR_TYPES in order, each either over every node (if listed in
         # node_sensor_types) or every link (otherwise) -- preserves LeakDB's original insertion
-        # order (pressure, flow, demand) exactly, since flow sits between the two node sensors
+        # order (pressure, flow, demand) exactly, since flow sits between the two node sensors.
+        # Keys are (signal_type, raw_id) -- no "node_"/"link_" tag, since the signal type
+        # already disambiguates a node-measured id from a link-measured one (loaders are
+        # responsible for giving sensor dataframe columns the same raw id as topology).
         all_node_ids = [nid for ids in self.node_idx.values() for nid in ids]
         all_link_ids = [lid for ids in self.link_idx.values() for lid in ids]
 
@@ -90,11 +93,11 @@ class GraphBuilder:
         for st in self.SENSOR_TYPES:
             if st in self.node_sensor_types:
                 for nid in all_node_ids:
-                    self.sensor_idx[(st, f'node_{nid}')] = idx
+                    self.sensor_idx[(st, nid)] = idx
                     idx += 1
             else:
                 for lid in all_link_ids:
-                    self.sensor_idx[(st, f'link_{lid}')] = idx
+                    self.sensor_idx[(st, lid)] = idx
                     idx += 1
 
 
@@ -165,13 +168,13 @@ class GraphBuilder:
             if st in self.node_sensor_types:
                 for nt, ids in self.node_idx.items():
                     for nid, n in ids.items():
-                        s = self.sensor_idx[(st, f'node_{nid}')]
+                        s = self.sensor_idx[(st, nid)]
                         c_side, s_side = sensor_pairs[nt]
                         c_side.append(n); s_side.append(s)
             else:
                 for lt, ids in self.link_idx.items():
                     for lid, l in ids.items():
-                        s = self.sensor_idx[(st, f'link_{lid}')]
+                        s = self.sensor_idx[(st, lid)]
                         c_side, s_side = sensor_pairs[lt]
                         c_side.append(l); s_side.append(s)
 
@@ -452,7 +455,7 @@ class GraphBuilder:
         Args:
             sensor_rows: {signal_type: pd.Series}, one row per entry of self.SENSOR_TYPES —
                          the discretized bin index for each sensor at this timestamp, indexed
-                         the same way sensor_idx's keys are (e.g. LeakDB's "node_<id>"/"link_<id>").
+                         by the same raw node/link id topology uses (no "node_"/"link_" tag).
         """
         data = base.clone()
         ei = self._build_measured_by_edges(sensor_rows)
@@ -467,10 +470,10 @@ class GraphBuilder:
         src, dst = [], []
 
         for st in self.SENSOR_TYPES:
-            for col, bin_idx in sensor_rows[st].items():
+            for loc, bin_idx in sensor_rows[st].items():
                 if pd.isna(bin_idx):
                     continue
-                s = self.sensor_idx[(st, col)]
+                s = self.sensor_idx[(st, loc)]
                 v = self.value_node_idx[(st, int(bin_idx))]
                 src.append(v)
                 dst.append(s)
