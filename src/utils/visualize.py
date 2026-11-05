@@ -5,28 +5,36 @@ from torch_geometric.data import HeteroData
 
 from src.data.graph_builder import GraphBuilder
 
-_NODE_COLORS = {
-    'junction':   '#4A90D9',
-    'reservoir':  '#27AE60',
-    'pipe':       '#95A5A6',
+# Fixed colors for the two sensor-abstraction node types, which exist regardless of dataset.
+_FIXED_NODE_COLORS = {
     'sensor':     '#E67E22',
     'value_node': '#E74C3C',
 }
 
+# Palette cycled across whatever physical node/link types a given topology actually has
+# (junction/reservoir/pipe for LeakDB, plus tank/pump/prv/... for DiTEC-WDN) — assigned in
+# _node_colors_for() rather than hardcoded here, since the set of types varies by dataset.
+_COMPONENT_COLOR_PALETTE = ['#4A90D9', '#27AE60', '#95A5A6', '#8E44AD', '#16A085', '#D35400', '#2C3E50', '#C0392B']
+
+# Colors keyed by relation name only (not the full (src, rel, dst) triple), so any new
+# component type reuses the same coloring for 'connected'/'has_sensor'/'located_at' edges.
 _EDGE_COLORS = {
-    ('value_node', 'measured_by',  'sensor'):    '#E74C3C',
-    ('sensor',     'has_measure',  'value_node'): '#C0392B',
-    ('junction',   'has_sensor',   'sensor'):    '#F39C12',
-    ('reservoir',  'has_sensor',   'sensor'):    '#F39C12',
-    ('pipe',       'has_sensor',   'sensor'):    '#F39C12',
-    ('sensor',     'located_at',   'junction'):  '#F8C471',
-    ('sensor',     'located_at',   'reservoir'): '#F8C471',
-    ('sensor',     'located_at',   'pipe'):      '#F8C471',
-    ('junction',   'connected',    'pipe'):      '#85C1E9',
-    ('pipe',       'connected',    'junction'):  '#85C1E9',
-    ('reservoir',  'connected',    'pipe'):      '#1A5276',
-    ('pipe',       'connected',    'reservoir'): '#1A5276',
+    'measured_by':  '#E74C3C',
+    'has_measure':  '#C0392B',
+    'has_sensor':   '#F39C12',
+    'located_at':   '#F8C471',
+    'connected':    '#85C1E9',
 }
+
+
+def _node_colors_for(gb: GraphBuilder) -> dict:
+    """{node_type: color}, covering every component type present in gb.node_idx/link_idx
+    (cycled from _COMPONENT_COLOR_PALETTE) plus the two fixed sensor-abstraction types."""
+    colors = dict(_FIXED_NODE_COLORS)
+    component_types = sorted(gb.node_idx.keys()) + sorted(gb.link_idx.keys())
+    for i, ct in enumerate(component_types):
+        colors[ct] = _COMPONENT_COLOR_PALETTE[i % len(_COMPONENT_COLOR_PALETTE)]
+    return colors
 
 
 def visualize_graph(data: HeteroData, gb: GraphBuilder,
@@ -42,11 +50,16 @@ def visualize_graph(data: HeteroData, gb: GraphBuilder,
     except ImportError:
         raise ImportError("pyvis is required for graph visualization: pip install pyvis")
 
-    idx_to_junction  = {v: k for k, v in gb.junction_idx.items()}
-    idx_to_reservoir = {v: k for k, v in gb.reservoir_idx.items()}
-    idx_to_pipe      = {v: k for k, v in gb.pipe_idx.items()}
-    idx_to_sensor    = {v: k for k, v in gb.sensor_idx.items()}
-    idx_to_value     = {v: k for k, v in gb.value_node_idx.items()}
+    # {node_type: {local_idx: original_id}}, covering every component type (not just
+    # junction/reservoir/pipe) so labels work for any dataset GraphBuilder was built from.
+    idx_to_component = {}
+    for type_idx in (gb.node_idx, gb.link_idx):
+        for ct, ids in type_idx.items():
+            idx_to_component[ct] = {v: k for k, v in ids.items()}
+    idx_to_sensor = {v: k for k, v in gb.sensor_idx.items()}
+    idx_to_value  = {v: k for k, v in gb.value_node_idx.items()}
+
+    node_colors = _node_colors_for(gb)
 
     net = Network(height='850px', width='100%', directed=True, heading=title)
     net.barnes_hut(gravity=-4000, central_gravity=0.3, spring_length=120, spring_strength=0.05)
@@ -56,14 +69,10 @@ def visualize_graph(data: HeteroData, gb: GraphBuilder,
 
     for node_type in data.node_types:
         n = data[node_type].num_nodes
-        color = _NODE_COLORS.get(node_type, '#9B59B6')
+        color = node_colors.get(node_type, '#9B59B6')
         for i in range(n):
-            if node_type == 'junction':
-                label = f"J:{idx_to_junction.get(i, i)}"
-            elif node_type == 'reservoir':
-                label = f"R:{idx_to_reservoir.get(i, i)}"
-            elif node_type == 'pipe':
-                label = f"P:{idx_to_pipe.get(i, i)}"
+            if node_type in idx_to_component:
+                label = f"{node_type[:3].upper()}:{idx_to_component[node_type].get(i, i)}"
             elif node_type == 'sensor':
                 st, sname = idx_to_sensor.get(i, ('?', str(i)))
                 label = f"{st[:3]}:{sname}"
@@ -87,7 +96,7 @@ def visualize_graph(data: HeteroData, gb: GraphBuilder,
         ei = edge_store.edge_index
         if ei.numel() == 0:
             continue
-        color = _EDGE_COLORS.get(edge_type, '#BDC3C7')
+        color = _EDGE_COLORS.get(rel, '#BDC3C7')
         width = 4 if rel == 'measured_by' else 1
         for j in range(ei.shape[1]):
             src_g = node_map.get((src_type, ei[0, j].item()))
