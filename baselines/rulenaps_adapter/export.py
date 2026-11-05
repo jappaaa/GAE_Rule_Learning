@@ -16,9 +16,6 @@ import pandas as pd
 
 from src.utils.config import Config
 
-NON_ITEM_COLS = ('scenario', 'split', 'label')
-
-
 def get_output_dir(config: Config) -> str:
     # lives inside the processed dir on purpose: the export is derived from dataset.parquet and becomes stale when it is reprocessed
     return os.path.join(config.processed_data_dir, 'rulenaps')
@@ -27,7 +24,11 @@ def get_output_dir(config: Config) -> str:
 def load_transactions(config: Config) -> tuple[pd.DataFrame, list[tuple[str, str, int]]]:
     """Load the one-hot transaction DataFrame and the item list, in the same column order as LeakDBDataset.items."""
     df = pd.read_parquet(os.path.join(config.processed_data_dir, 'dataset.parquet'))
-    item_cols = [c for c in df.columns if c not in NON_ITEM_COLS]
+    # Item columns always have a "signal;raw_id;bin_idx" shape (contain a semicolon);
+    # metadata columns (scenario/scenario_id/time_id/split/label, which differ per
+    # dataset) never do -- this identifies item columns without hardcoding which
+    # metadata columns a given dataset happens to have.
+    item_cols = [c for c in df.columns if ';' in c]
     items = [(st, sname, int(b)) for st, sname, b in (c.split(';') for c in item_cols)]
     return df, items
 
@@ -58,7 +59,7 @@ def export(config: Config, split: str = 'all') -> dict:
             raise ValueError("dataset.parquet rows are not ordered train-then-val; RuleNaps' positional split would mix them")
     else:
         df = df[df['split'] == split]
-    item_cols = [c for c in df.columns if c not in NON_ITEM_COLS]
+    item_cols = [c for c in df.columns if ';' in c]
     item_matrix = df[item_cols].to_numpy(dtype=bool)
 
     out_dir = get_output_dir(config)
