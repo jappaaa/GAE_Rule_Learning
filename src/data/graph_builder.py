@@ -15,23 +15,35 @@ class GraphBuilder:
                    optionally also (sensor, has_measure, value_node) if bidirectional=True
     """
 
-    SENSOR_TYPES = ['pressure', 'flow', 'demand']
-
     def __init__(self, topology: dict, n_bins_per_type: dict, bidirectional: bool = False,
-                 virtual_node_mode: str = 'none', onehot_bin_features: bool = True):
+                 virtual_node_mode: str = 'none', onehot_bin_features: bool = True,
+                 sensor_types: tuple = ('pressure', 'flow', 'demand'),
+                 node_sensor_types: tuple = ('pressure', 'demand')):
         """
         Args:
-            topology: output of LeakDBLoader.load_topology()
+            topology: output of a loader's load_topology() — {"nodes": {id: {"type": ...}},
+                      "links": {id: {"type": ..., "start_node": ..., "end_node": ...}}}
             n_bins_per_type: actual number of bins per sensor type after fitting,
                              e.g. {'pressure': 3, 'flow': 3, 'demand': 3}
             bidirectional: if True, has_measure edges are added in both directions
             onehot_bin_features: if True, value_node bin feature is one-hot; if False, normalized scalar
+            sensor_types: ordered list of signal types to build sensors for (was a hardcoded
+                          class attribute SENSOR_TYPES); defaults to LeakDB's 3 signals
+            node_sensor_types: subset of sensor_types measured once per node, across every
+                              node type present in topology (e.g. pressure/demand); every other
+                              sensor_types entry is assumed measured once per link instead,
+                              across every link type (e.g. flow) — matches both LeakDB and
+                              DiTEC-WDN, where sensor signals are organized by node/link
+                              category rather than by component sub-type (unlike static
+                              attributes, which do differ per sub-type)
         """
         self.topology = topology
         self.n_bins_per_type = n_bins_per_type
         self.bidirectional = bidirectional
         self.virtual_node_mode = virtual_node_mode
         self.onehot_bin_features = onehot_bin_features
+        self.SENSOR_TYPES = list(sensor_types)
+        self.node_sensor_types = set(node_sensor_types)
 
         self._build_node_indices()
         self._build_static_edges()
@@ -39,32 +51,51 @@ class GraphBuilder:
         self._build_static_node_features()
 
     def _build_node_indices(self):
-        """Assign integer indices from 0 to n_nodes - 1 within each node type. The indices are stored inside dictionaries 
-           linking each index to the original node id
+        """Assign integer indices from 0 to n_nodes - 1 within each node type, and within each
+        link type, derived generically from whatever types are present in `topology` (not
+        hardcoded to junction/reservoir/pipe, so this also works for DiTEC-WDN's additional
+        tank/pump/prv/... types). The indices are stored inside dictionaries linking each
+        index to the original node/link id.
         """
 
-        # junction and reservoir indices derived from topology
-        junction_ids = [nid for nid, types in self.topology['nodes'].items() if types['type'] == 'junction']
-        reservoir_ids = [nid for nid, types in self.topology['nodes'].items() if types['type'] == 'reservoir']
-        self.junction_idx = {nid: i for i, nid in enumerate(junction_ids)}
-        self.reservoir_idx = {nid: i for i, nid in enumerate(reservoir_ids)}
+        # node/link type indices derived from topology
+        node_types = sorted({info['type'] for info in self.topology['nodes'].values()})
+        link_types = sorted({info['type'] for info in self.topology['links'].values()})
 
-        # pipe indices derived from topology
-        self.pipe_idx = {pid: i for i, pid in enumerate(self.topology['pipes'].keys())}
+        self.node_idx = {}
+        for nt in node_types:
+            ids = [nid for nid, info in self.topology['nodes'].items() if info['type'] == nt]
+            self.node_idx[nt] = {nid: i for i, nid in enumerate(ids)}
 
-        # sensor indices: pressure + demand at all nodes, flow at all pipes
-        all_node_ids = list(self.junction_idx.keys()) + list(self.reservoir_idx.keys())
+        self.link_idx = {}
+        for lt in link_types:
+            ids = [lid for lid, info in self.topology['links'].items() if info['type'] == lt]
+            self.link_idx[lt] = {lid: i for i, lid in enumerate(ids)}
+
+        # backward-compat aliases for LeakDB's two node types / one link type -- used by the
+        # rest of this class (generalized incrementally, see docs/experiment_plan.md) and by
+        # src/utils/visualize.py
+        self.junction_idx = self.node_idx.get('junction', {})
+        self.reservoir_idx = self.node_idx.get('reservoir', {})
+        self.pipe_idx = self.link_idx.get('pipe', {})
+
+        # sensor indices: self.SENSOR_TYPES in order, each either over every node (if listed in
+        # node_sensor_types) or every link (otherwise) -- preserves LeakDB's original insertion
+        # order (pressure, flow, demand) exactly, since flow sits between the two node sensors
+        all_node_ids = [nid for ids in self.node_idx.values() for nid in ids]
+        all_link_ids = [lid for ids in self.link_idx.values() for lid in ids]
+
         self.sensor_idx = {}
         idx = 0
-        for nid in all_node_ids:
-            self.sensor_idx[('pressure', f'node_{nid}')] = idx
-            idx += 1
-        for nid in all_node_ids:
-            self.sensor_idx[('demand', f'node_{nid}')] = idx
-            idx += 1
-        for pid in self.pipe_idx:
-            self.sensor_idx[('flow', f'link_{pid}')] = idx
-            idx += 1
+        for st in self.SENSOR_TYPES:
+            if st in self.node_sensor_types:
+                for nid in all_node_ids:
+                    self.sensor_idx[(st, f'node_{nid}')] = idx
+                    idx += 1
+            else:
+                for lid in all_link_ids:
+                    self.sensor_idx[(st, f'link_{lid}')] = idx
+                    idx += 1
 
 
         # value node indices: one per (sensor_type, bin_idx) key using actual n_bins per type (currently share per type)
@@ -97,61 +128,57 @@ class GraphBuilder:
         return torch.tensor([src, dst], dtype=torch.long)
 
     def _build_static_edges(self):
-        """Build edge indices for connected and has_sensor edges.
+        """Build edge indices for connected and has_sensor edges, generalized over whatever
+        node/link types are present in topology (not hardcoded to junction/reservoir/pipe).
 
         Stores two dicts of pre-built edge_index tensors:
-          self.connected_edges   — junction/reservoir <-> pipe
-          self.has_sensor_edges  — junction/reservoir/pipe -> sensor
+          self.connected_edges   — (node_type, connected, link_type) bidirectional, one pair
+                                    per (node_type, link_type) combination that actually occurs
+          self.has_sensor_edges  — (component_type, has_sensor, sensor) + reverse located_at,
+                                    one pair per component type that has a sensor of some kind
+                                    (following the same node_sensor_types/link split as
+                                    _build_node_indices)
         """
-        junc_pipe_src, junc_pipe_dst = [], []
-        res_pipe_src,  res_pipe_dst  = [], []
+        # node id -> its node type, to classify each link endpoint below
+        node_type_of = {nid: nt for nt, ids in self.node_idx.items() for nid in ids}
 
-        for pid, pipe_endpoints in self.topology['pipes'].items():
-            p = self.pipe_idx[pid]
-            for endpoint in ('start_node', 'end_node'):
-                nid = pipe_endpoints[endpoint]
-                if nid in self.junction_idx:
-                    j = self.junction_idx[nid]
-                    junc_pipe_src.append(j); junc_pipe_dst.append(p)
-                else:
-                    r = self.reservoir_idx[nid]
-                    res_pipe_src.append(r); res_pipe_dst.append(p)
+        connected_pairs = defaultdict(lambda: ([], []))  # (node_type, link_type) -> (node_side, link_side)
+        for lt, ids in self.link_idx.items():
+            for lid, l in ids.items():
+                endpoints = self.topology['links'][lid]
+                for endpoint in ('start_node', 'end_node'):
+                    nid = endpoints[endpoint]
+                    nt = node_type_of[nid]
+                    n = self.node_idx[nt][nid]
+                    n_side, l_side = connected_pairs[(nt, lt)]
+                    n_side.append(n); l_side.append(l)
 
-        self.connected_edges = {
-            ('junction',   'connected', 'pipe'):       self._ei(junc_pipe_src, junc_pipe_dst),
-            ('pipe',       'connected', 'junction'):   self._ei(junc_pipe_dst, junc_pipe_src),
-            ('reservoir',  'connected', 'pipe'):       self._ei(res_pipe_src,  res_pipe_dst),
-            ('pipe',       'connected', 'reservoir'):  self._ei(res_pipe_dst,  res_pipe_src),
-        }
+        self.connected_edges = {}
+        for (nt, lt), (n_side, l_side) in connected_pairs.items():
+            self.connected_edges[(nt, 'connected', lt)] = self._ei(n_side, l_side)
+            self.connected_edges[(lt, 'connected', nt)] = self._ei(l_side, n_side)
 
-        # has_sensor: each junction/reservoir has one pressure + one demand sensor;
-        # each pipe has one flow sensor
-        junc_s_src, junc_s_dst = [], []
-        res_s_src,  res_s_dst  = [], []
-        pipe_s_src, pipe_s_dst = [], []
+        # has_sensor: one (component_type, sensor) pair per SENSOR_TYPES entry that applies to
+        # that component type, following the node_sensor_types/link split from _build_node_indices
+        sensor_pairs = defaultdict(lambda: ([], []))  # component_type -> (comp_side, sensor_side)
+        for st in self.SENSOR_TYPES:
+            if st in self.node_sensor_types:
+                for nt, ids in self.node_idx.items():
+                    for nid, n in ids.items():
+                        s = self.sensor_idx[(st, f'node_{nid}')]
+                        c_side, s_side = sensor_pairs[nt]
+                        c_side.append(n); s_side.append(s)
+            else:
+                for lt, ids in self.link_idx.items():
+                    for lid, l in ids.items():
+                        s = self.sensor_idx[(st, f'link_{lid}')]
+                        c_side, s_side = sensor_pairs[lt]
+                        c_side.append(l); s_side.append(s)
 
-        for nid, j in self.junction_idx.items():
-            for st in ('pressure', 'demand'):
-                s = self.sensor_idx[(st, f'node_{nid}')]
-                junc_s_src.append(j); junc_s_dst.append(s)
-
-        for nid, r in self.reservoir_idx.items():
-            for st in ('pressure', 'demand'):
-                s = self.sensor_idx[(st, f'node_{nid}')]
-                res_s_src.append(r); res_s_dst.append(s)
-
-        for pid, p in self.pipe_idx.items():
-            s = self.sensor_idx[('flow', f'link_{pid}')]
-            pipe_s_src.append(p); pipe_s_dst.append(s)
-
-        self.has_sensor_edges = {
-            ('junction',  'has_sensor',  'sensor'):    self._ei(junc_s_src, junc_s_dst),
-            ('reservoir', 'has_sensor',  'sensor'):    self._ei(res_s_src,  res_s_dst),
-            ('pipe',      'has_sensor',  'sensor'):    self._ei(pipe_s_src, pipe_s_dst),
-            ('sensor',    'located_at',  'junction'):  self._ei(junc_s_dst, junc_s_src),
-            ('sensor',    'located_at',  'reservoir'): self._ei(res_s_dst,  res_s_src),
-            ('sensor',    'located_at',  'pipe'):      self._ei(pipe_s_dst, pipe_s_src),
-        }
+        self.has_sensor_edges = {}
+        for comp_type, (c_side, s_side) in sensor_pairs.items():
+            self.has_sensor_edges[(comp_type, 'has_sensor', 'sensor')] = self._ei(c_side, s_side)
+            self.has_sensor_edges[('sensor', 'located_at', comp_type)] = self._ei(s_side, c_side)
 
     def _build_virtual_node_edges(self):
         """Build edge indices connecting sensors to virtual nodes based on virtual_node_mode.
@@ -251,6 +278,20 @@ class GraphBuilder:
         if self.virtual_node_mode in ('hierarchical', 'hierarchical_direct', 'global'):
             self.global_virtual_x = torch.zeros(1, 1)
 
+    def _component_offsets(self) -> tuple:
+        """Return ({component_type: global_offset}, total_count), spanning every node type
+        then every link type present in topology (not hardcoded to junction/reservoir/pipe).
+        Shared by build_sensor_distance_map/build_sensor_hop_map, which flatten all component
+        types into one adjacency array for BFS.
+        """
+        type_off = {}
+        offset = 0
+        for type_idx in (self.node_idx, self.link_idx):
+            for ct, ids in type_idx.items():
+                type_off[ct] = offset
+                offset += len(ids)
+        return type_off, offset
+
     def build_sensor_distance_map(self) -> dict:
         """Return {sensor_idx: {other_sensor_idx: network_hop_distance}}.
 
@@ -264,13 +305,7 @@ class GraphBuilder:
         Note: build_sensor_hop_map uses raw graph hops — kept separate because it
         serves the GNN receptive field filter where graph layers are the natural unit.
         """
-        n_j = len(self.junction_idx)
-        n_r = len(self.reservoir_idx)
-        off_r = n_j
-        off_p = n_j + n_r
-        n_network_nodes = off_p + len(self.pipe_idx)
-
-        type_off = {'junction': 0, 'reservoir': off_r, 'pipe': off_p}
+        type_off, n_network_nodes = self._component_offsets()
 
         # adjacency on network nodes only — no sensor nodes, no measured_by edges
         adj = [[] for _ in range(n_network_nodes)]
@@ -327,17 +362,10 @@ class GraphBuilder:
         Pass max_hops = num_layers - 1 to account for the one hop from antecedent
         value_node to antecedent sensor before traversing topology.
         """
-        # Determine the global offsets for each node type
-        n_j = len(self.junction_idx)
-        n_r = len(self.reservoir_idx)
-        n_p = len(self.pipe_idx)
-        off_r = n_j
-        off_p = n_j + n_r
-        off_s = n_j + n_r + n_p
+        # Determine the global offsets for each component type, plus sensors at the end
+        type_off, off_s = self._component_offsets()
+        type_off = {**type_off, 'sensor': off_s}
         total = off_s + self.n_sensors
-
-        # set the offsets per node type for easy access
-        type_off = {'junction': 0, 'reservoir': off_r, 'pipe': off_p, 'sensor': off_s}
 
         # from the typespecific edge indexes, create a global one 
         adj = [[] for _ in range(total)]
@@ -371,32 +399,32 @@ class GraphBuilder:
 
         return sensor_hop_map
 
-    def build_base(self, junc_attrs: pd.DataFrame, pipe_attrs: pd.DataFrame) -> HeteroData:
-        """Build the static HeteroData for one scenario (node features + static edges).
+    def build_base(self, attrs_dfs: dict) -> HeteroData:
+        """Build the static HeteroData for one scenario (node/link features + static edges).
         Called once per scenario; result is reused across all its timestamps.
 
         Args:
-            junc_attrs: DataFrame indexed by node_id, column 'base_demand' (RobustScaler-normalized)
-            pipe_attrs: DataFrame indexed by pipe_id, columns 'length', 'diameter', 'roughness' (RobustScaler-normalized)
+            attrs_dfs: {component_type: df}, one DataFrame per node/link type present in
+                       topology, indexed by component id, one column per static attribute
+                       (already normalized upstream) — same shape
+                       DiTECWDNLoader.load_attributes_as_df() returns for one scenario. A
+                       type with no entry, or an empty df (e.g. LeakDB's reservoir, whose
+                       head is excluded as constant across scenarios), gets a 1-column
+                       zero placeholder instead.
         """
         data = HeteroData()
 
-        # junction: [base_demand] — elevation excluded (constant 30 m across all scenarios)
-        junction_x = torch.zeros(len(self.junction_idx), 1)
-        for nid, j in self.junction_idx.items():
-            junction_x[j, 0] = junc_attrs.loc[nid, 'base_demand']
-        data['junction'].x = junction_x
-
-        # reservoir: zeros placeholder — head excluded (constant 100 m across all scenarios)
-        data['reservoir'].x = torch.zeros(len(self.reservoir_idx), 1)
-
-        # pipe: [length, diameter, roughness]
-        pipe_x = torch.zeros(len(self.pipe_idx), 3)
-        for pid, p in self.pipe_idx.items():
-            pipe_x[p, 0] = pipe_attrs.loc[pid, 'length']
-            pipe_x[p, 1] = pipe_attrs.loc[pid, 'diameter']
-            pipe_x[p, 2] = pipe_attrs.loc[pid, 'roughness']
-        data['pipe'].x = pipe_x
+        for type_idx in (self.node_idx, self.link_idx):
+            for ct, ids in type_idx.items():
+                df = attrs_dfs.get(ct)
+                if df is None or df.shape[1] == 0:
+                    x = torch.zeros(len(ids), 1)
+                else:
+                    cols = list(df.columns)
+                    x = torch.zeros(len(ids), len(cols))
+                    for cid, i in ids.items():
+                        x[i] = torch.tensor(df.loc[cid, cols].values, dtype=torch.float32)
+                data[ct].x = x
 
         # sensor and value_node features are fixed across all scenarios
         data['sensor'].x = self.sensor_x
@@ -418,27 +446,28 @@ class GraphBuilder:
 
         return data
 
-    def build(self, base: HeteroData, pressures_row: pd.Series, flows_row: pd.Series, demands_row: pd.Series) -> HeteroData:
-        """Clone the scenario base graph and attach dynamic measured_by edges for one timestamp."""
+    def build(self, base: HeteroData, sensor_rows: dict) -> HeteroData:
+        """Clone the scenario base graph and attach dynamic measured_by edges for one timestamp.
+
+        Args:
+            sensor_rows: {signal_type: pd.Series}, one row per entry of self.SENSOR_TYPES —
+                         the discretized bin index for each sensor at this timestamp, indexed
+                         the same way sensor_idx's keys are (e.g. LeakDB's "node_<id>"/"link_<id>").
+        """
         data = base.clone()
-        ei = self._build_measured_by_edges(pressures_row, flows_row, demands_row)
+        ei = self._build_measured_by_edges(sensor_rows)
         data[('value_node', 'measured_by', 'sensor')].edge_index = ei
         if self.bidirectional:
             data[('sensor', 'has_measure', 'value_node')].edge_index = ei.flip(0)
         return data
 
-    def _build_measured_by_edges(self, pressures_row: pd.Series, flows_row: pd.Series, demands_row: pd.Series) -> torch.Tensor:
+    def _build_measured_by_edges(self, sensor_rows: dict) -> torch.Tensor:
         """Return edge_index [2, n_edges] connecting each value node to its sensor (value_node → sensor).
         Sensors with NaN readings are skipped."""
         src, dst = [], []
 
-        sensor_rows = [
-            ('pressure', pressures_row),
-            ('demand',   demands_row),
-            ('flow',     flows_row),
-        ]
-        for st, row in sensor_rows:
-            for col, bin_idx in row.items():
+        for st in self.SENSOR_TYPES:
+            for col, bin_idx in sensor_rows[st].items():
                 if pd.isna(bin_idx):
                     continue
                 s = self.sensor_idx[(st, col)]

@@ -23,15 +23,16 @@ class LeakDBLoader:
             {n: {"type": "reservoir"} for n in self.base_wn.reservoir_name_list}
         )
 
-        pipes = {
+        links = {
             name: {
+                "type": "pipe",
                 "start_node": self.base_wn.get_link(name).start_node_name,
                 "end_node": self.base_wn.get_link(name).end_node_name,
             }
             for name in self.base_wn.pipe_name_list
         }
 
-        return {"nodes": nodes, "pipes": pipes}
+        return {"nodes": nodes, "links": links}
     
 
     def load_attributes(self, scenario: int) -> dict:

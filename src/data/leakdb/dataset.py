@@ -162,19 +162,18 @@ class LeakDBDataset(Dataset):
             # slice the attributes for this scenario and build the base graph
             junc_s = junc_df.xs(scenario, level='scenario')
             pipe_s = pipe_df.xs(scenario, level='scenario')
-            base = gb.build_base(junc_s, pipe_s)
+            base = gb.build_base({'junction': junc_s, 'pipe': pipe_s})
             torch.save(base, os.path.join(self.processed_dir, f'base_{scenario}.pt'))
 
             # iterate over all rows beloning to this scenario
             sc_df = df[df['scenario'] == scenario]
             for graph_idx, row in sc_df.iterrows():
                 # build single graph
-                graph = gb.build(
-                    base,
-                    disc_p_df.loc[graph_idx].rename(index=lambda c: c.split(';')[1]),   # type prefix is removed as the graph builder expects
-                    disc_f_df.loc[graph_idx].rename(index=lambda c: c.split(';')[1]),   # .loc returns series where column names became the index
-                    disc_d_df.loc[graph_idx].rename(index=lambda c: c.split(';')[1]),   # therefore index instead of columns are renamed
-                )
+                graph = gb.build(base, {
+                    'pressure': disc_p_df.loc[graph_idx].rename(index=lambda c: c.split(';')[1]),   # type prefix is removed as the graph builder expects
+                    'flow':     disc_f_df.loc[graph_idx].rename(index=lambda c: c.split(';')[1]),   # .loc returns series where column names became the index
+                    'demand':   disc_d_df.loc[graph_idx].rename(index=lambda c: c.split(';')[1]),   # therefore index instead of columns are renamed
+                })
                 graph.y = torch.tensor([int(row['label'])], dtype=torch.long)
 
                 # validate the graph formatting and save it
