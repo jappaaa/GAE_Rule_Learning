@@ -4,7 +4,6 @@ import pandas as pd
 from mlxtend.frequent_patterns import fpgrowth, association_rules
 from tqdm import tqdm
 
-from src.data.leakdb.dataset import LeakDBDataset
 from src.utils.config import Config
 
 
@@ -17,7 +16,7 @@ class FPExtractor:
         'consequent': (sensor_type, sensor_name, bin_idx) tuple
     """
 
-    def __init__(self, dataset: LeakDBDataset, config: Config):
+    def __init__(self, dataset, config: Config):
         self.dataset = dataset
         self.config = config
 
@@ -28,8 +27,12 @@ class FPExtractor:
         # train rows); otherwise FP-growth would be the only method whose rules are shaped by val data too
         train_df = self.dataset.df[self.dataset.df['split'] == 'train']
 
-        # mlxtend fpgrowth expects a bool DataFrame; column names are used as item labels
-        item_cols = [c for c in self.dataset.df.columns if c not in ('scenario', 'split', 'label')]
+        # mlxtend fpgrowth expects a bool DataFrame; column names are used as item labels.
+        # Item columns always have a "signal;raw_id;bin_idx" shape (contain a semicolon);
+        # metadata columns (scenario/scenario_id/time_id/split/label, which differ per
+        # dataset) never do -- this identifies item columns without hardcoding which
+        # metadata columns a given dataset happens to have.
+        item_cols = [c for c in self.dataset.df.columns if ';' in c]
         bool_df = train_df[item_cols].astype(bool)
 
         print(f"  Mining frequent itemsets (min_support={self.config.min_support_fp}, max_len={self.config.max_antecedent_size + 1})...")
@@ -46,6 +49,10 @@ class FPExtractor:
         print(f"  Generated {len(raw_rules)} raw rules in {time.time() - t0:.1f}s")
 
         print("  Filtering and converting rules...")
+        # map column names back to item tuples -- computed once, not per rule row (this used to be
+        # rebuilt from scratch inside the loop below, which was tolerable at LeakDB's 980 items but
+        # became an O(n_rules * n_items) bottleneck at DiTEC-WDN's 24254, hanging for tens of minutes)
+        col_to_item = {c: item for c, item in zip(item_cols, items)}
         rules = []
         for _, row in tqdm(raw_rules.iterrows(), total=len(raw_rules), desc="  Rules"):
             ant_cols = list(row['antecedents'])
@@ -59,8 +66,6 @@ class FPExtractor:
             if len(ant_cols) > self.config.max_antecedent_size:
                 continue
 
-            # map column names back to item tuples
-            col_to_item = {c: item for c, item in zip(item_cols, items)}
             antecedent = [col_to_item[c] for c in ant_cols]
             consequent = col_to_item[con_cols[0]]
 
