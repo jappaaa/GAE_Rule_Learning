@@ -6,7 +6,6 @@ from pathlib import Path
 import optuna
 import torch
 
-from src.data.leakdb.dataset import LeakDBDataset
 from src.model.gae import GraphAutoEncoder
 from src.rules.evaluator import RuleEvaluator
 from src.rules.extractor import RuleExtractor
@@ -47,7 +46,7 @@ def _sample_params(trial: optuna.Trial, base_config: Config) -> Config:
 def _objective(
     trial: optuna.Trial,
     base_config: Config,
-    dataset: LeakDBDataset,
+    dataset,
     device: torch.device,
     run_dir: Path,
 ) -> float:
@@ -116,7 +115,7 @@ def _objective(
 
 def run_hpo(
     base_config: Config,
-    dataset: LeakDBDataset,
+    dataset,
     device: torch.device,
     run_dir: Path,
 ) -> 'optuna.Study':

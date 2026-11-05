@@ -1,6 +1,5 @@
 import torch
 
-from src.data.leakdb.dataset import LeakDBDataset
 from src.data.graph_builder import GraphBuilder
 from src.utils.config import Config
 
@@ -42,7 +41,7 @@ def annotate_hop_distances(rules: list[dict], gb: GraphBuilder) -> dict | None:
 
 
 class RuleEvaluator:
-    def __init__(self, dataset: LeakDBDataset, config: Config, device: torch.device, split: str = 'train'):
+    def __init__(self, dataset, config: Config, device: torch.device, split: str = 'train'):
         """split selects which rows of dataset.tensor to evaluate against: 'train' (default) evaluates rules on
         exactly the rows they were mined from, keeping 'val' free for a held-out signal (e.g. RuleNaps'
         validation loss) elsewhere instead of mixing it into this comparison. 'all' evaluates on every row.

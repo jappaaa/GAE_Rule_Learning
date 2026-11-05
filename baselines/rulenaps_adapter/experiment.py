@@ -15,7 +15,6 @@ import torch
 from baselines.rulenaps_adapter.convert import convert_run
 from baselines.rulenaps_adapter.evaluate import evaluate_run
 from baselines.rulenaps_adapter.run import run
-from src.data.leakdb.dataset import LeakDBDataset
 from src.utils.config import Config
 
 
@@ -23,7 +22,7 @@ def run_experiment(
     config: Config,
     params: dict,
     run_dir: str | Path,
-    dataset: LeakDBDataset,
+    dataset,
     device: torch.device,
     compute_hop_distance: bool = False,
     threads: int = 16,
@@ -35,7 +34,7 @@ def run_experiment(
         config:               project config (used for split, train_ratio, max_antecedent_size, etc.)
         params:               RuleNaps hyperparameter overrides (on top of DEFAULT_PARAMS in run.py)
         run_dir:              directory to write all RuleNaps and adapter output files to
-        dataset:              pre-built LeakDBDataset, shared across calls to avoid reloading
+        dataset:              pre-built dataset, shared across calls to avoid reloading
         device:               torch device for RuleEvaluator
         compute_hop_distance: whether to annotate rules with hop distances (slow; skip for HPO)
         threads:              torch CPU threads for RuleNaps training (default: 16, as the authors)

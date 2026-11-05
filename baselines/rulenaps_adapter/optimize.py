@@ -96,7 +96,7 @@ def _coverage_constraint(trial: optuna.trial.FrozenTrial) -> list[float]:
 
 
 def _objective(trial: optuna.Trial, objective: str, min_coverage: float | None, config: Config, eval_config: Config,
-               dataset: LeakDBDataset, device: torch.device, run_dir: Path, threads: int) -> float:
+               dataset, device: torch.device, run_dir: Path, threads: int) -> float:
     """Train RuleNaps with the sampled parameters, evaluate its rules, and return the objective value."""
     params = sample_params(trial)
     trial_dir = run_dir / f'trial_{trial.number:04d}'

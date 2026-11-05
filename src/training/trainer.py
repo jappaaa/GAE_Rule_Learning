@@ -7,13 +7,12 @@ from torch_geometric.loader import DataLoader
 from torch.utils.data import SubsetRandomSampler
 
 from src.model.gae import GraphAutoEncoder
-from src.data.leakdb.dataset import LeakDBDataset
 from src.training.masking import Masker
 from src.utils.config import Config
 
 
 class Trainer:
-    def __init__(self, model: GraphAutoEncoder, dataset: LeakDBDataset, config: Config, device: torch.device):
+    def __init__(self, model: GraphAutoEncoder, dataset, config: Config, device: torch.device):
         self.model = model
         self.dataset = dataset
         self.config = config

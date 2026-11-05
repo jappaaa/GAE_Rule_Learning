@@ -6,7 +6,6 @@ import torch
 from torch_geometric.data import Batch as PyGBatch
 from tqdm import tqdm
 
-from src.data.leakdb.dataset import LeakDBDataset
 from src.data.graph_builder import GraphBuilder
 from src.model.gae import GraphAutoEncoder
 from src.utils.config import Config
@@ -14,7 +13,7 @@ from src.utils.config import Config
 
 class RuleExtractor:
     def __init__(self, model: GraphAutoEncoder, graph_builder: GraphBuilder,
-                 dataset: LeakDBDataset, config: Config, device: torch.device):
+                 dataset, config: Config, device: torch.device):
         self.model = model
         self.gb = graph_builder
         self.dataset = dataset

@@ -32,7 +32,7 @@ def load_rules(run_dir: str) -> list[dict]:
     return [{'antecedent': [tuple(i) for i in r['antecedent']], 'consequent': tuple(r['consequent'])} for r in raw]
 
 
-def evaluate_rules(rules: list[dict], dataset: LeakDBDataset, config: Config, device: torch.device,
+def evaluate_rules(rules: list[dict], dataset, config: Config, device: torch.device,
                    compute_hop_distance: bool) -> tuple[list[dict], dict]:
     """Evaluate rules and return the evaluated rules (filtered if config.filter_rules) and the metric averages."""
     if not rules:
@@ -47,7 +47,7 @@ def evaluate_rules(rules: list[dict], dataset: LeakDBDataset, config: Config, de
     return evaluated_rules, averages
 
 
-def evaluate_run(config: Config, run_dir: str, dataset: LeakDBDataset = None, device: torch.device = None,
+def evaluate_run(config: Config, run_dir: str, dataset=None, device: torch.device = None,
                  compute_hop_distance: bool = None, save: bool = True) -> dict:
     """Evaluate the rules of one Aerial run directory and return the metric averages.
 

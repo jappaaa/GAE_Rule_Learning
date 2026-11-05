@@ -74,7 +74,7 @@ def sample_params(trial: optuna.Trial) -> dict:
     }
 
 
-def _objective(trial: optuna.Trial, config: Config, eval_config: Config, dataset: LeakDBDataset,
+def _objective(trial: optuna.Trial, config: Config, eval_config: Config, dataset,
                device: torch.device, run_dir: Path) -> float:
     """Train Aerial with the sampled parameters, evaluate its rules, and return confidence_zhang (0.0 if no rules)."""
     train_params = sample_params(trial)
