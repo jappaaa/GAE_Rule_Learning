@@ -19,9 +19,6 @@ import pandas as pd
 
 from src.utils.config import Config
 
-NON_ITEM_COLS = ['scenario', 'split', 'label']
-
-
 def get_output_dir(config: Config) -> str:
     # lives inside the processed dir on purpose: the export is derived from dataset_categorical.parquet and
     # becomes stale when it is reprocessed
@@ -33,7 +30,11 @@ def load_transactions(config: Config, split: str = 'all') -> pd.DataFrame:
     df = pd.read_parquet(os.path.join(config.processed_data_dir, 'dataset_categorical.parquet'))
     if split != 'all':
         df = df[df['split'] == split]
-    item_cols = [c for c in df.columns if c not in NON_ITEM_COLS]
+    # Item columns always have a "signal;raw_id" shape (contain a semicolon); metadata
+    # columns (scenario/scenario_id/time_id/split/label, which differ per dataset) never
+    # do -- this identifies item columns without hardcoding which metadata columns a
+    # given dataset happens to have.
+    item_cols = [c for c in df.columns if ';' in c]
     return df[item_cols]
 
 
