@@ -6,4 +6,5 @@ numpy
 wntr
 pyvis
 huggingface_hub
+rdflib
 

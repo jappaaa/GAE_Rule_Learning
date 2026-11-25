@@ -278,6 +278,7 @@ class RuleExtractor:
           'all_bins'   — one edge per bin for each non-antecedent sensor
           'random_bin' — one edge to a random bin for each non-antecedent sensor
         """
+        # in case there are multiple scenarios, and thereby base graphs, a random one is chosen to buld the query graph, else there is only 1 choice
         scenario = self._rng.choice(list(self.dataset.base_graphs.keys()))
         graph = self.dataset.base_graphs[scenario].clone().to(self.device)
 

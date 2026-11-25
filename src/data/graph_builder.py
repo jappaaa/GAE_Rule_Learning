@@ -112,10 +112,12 @@ class GraphBuilder:
         self.n_sensors = len(self.sensor_idx)
         self.n_value_nodes = len(self.value_node_idx)
 
+        # also required for loss calculation of the model
         self.sensor_indices_by_type = {
             st: torch.tensor([idx for (stype, _), idx in self.sensor_idx.items() if stype == st])
             for st in self.SENSOR_TYPES
         }
+        # also required for loss calculation of the model
         self.value_indices_by_type = {
             st: torch.tensor([idx for (vtype, _), idx in self.value_node_idx.items() if vtype == st])
             for st in self.SENSOR_TYPES
@@ -249,7 +251,7 @@ class GraphBuilder:
         """
         type_to_idx = {st: i for i, st in enumerate(self.SENSOR_TYPES)}
 
-        # sensor: one-hot type — shape (n_sensors, 3)
+        # sensor: one-hot type — shape (n_sensors, n_sensor_types)
         sensor_x = torch.zeros(self.n_sensors, len(self.SENSOR_TYPES))
         for (st, _), s_i in self.sensor_idx.items():
             sensor_x[s_i, type_to_idx[st]] = 1.0
