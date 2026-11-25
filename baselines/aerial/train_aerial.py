@@ -34,11 +34,19 @@ def _default_rule_params(config: Config) -> dict:
     """Default aerial.rule_extraction.generate_rules kwargs, pinned to the GAE pipeline's analogous settings
     for comparability: min_rule_frequency/min_rule_strength are Aerial's names for the antecedent/consequent
     probability thresholds the GAE extractor also thresholds on, and max_antecedents is the same antecedent-size
-    cap every other baseline is held to. All three stay directly overridable via rule_params."""
+    cap every other baseline is held to. All three stay directly overridable via rule_params.
+
+    filter_min_confidence/filter_min_support are disabled: Aerial applies these as exact-metric post-filters
+    by default (filter_min_confidence otherwise mirrors min_rule_strength), which GAE's own extractor has no
+    equivalent of -- GAE/FP-growth leave all exact-metric filtering to RuleEvaluator's own config.filter_rules
+    (disabled throughout these experiments), so Aerial must return its full raw candidate set the same way for
+    the comparison to stay apples-to-apples."""
     return {
         'min_rule_frequency': config.antecedent_threshold,
         'min_rule_strength': config.consequent_threshold,
         'max_antecedents': config.max_antecedent_size,
+        'filter_min_confidence': None,
+        'filter_min_support': None,
     }
 
 
