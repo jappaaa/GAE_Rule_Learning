@@ -31,8 +31,8 @@ import torch
 
 from baselines.aerial.experiment import run_experiment
 from baselines.aerial.export import export
-from src.data.leakdb.dataset import LeakDBDataset
 from src.utils.config import Config
+from src.utils.dataset_factory import build_dataset
 
 # Calibrated to this dataset's scale per PyAerial's Parameter Tuning Guide:
 #   - epochs: the guide recommends short training (1-5) for fewer/higher-quality rules, 10+ for more/
@@ -115,7 +115,7 @@ def run_hpo(config: Config, study_name: str, n_trials: int) -> tuple[optuna.Stud
         hpo_best.json     best trial and its parameters
     """
     device = torch.device(config.device if config.device else ('cuda' if torch.cuda.is_available() else 'cpu'))
-    dataset = LeakDBDataset(config)  # (re)builds the processed dir if missing; shared by all trials for rule evaluation
+    dataset = build_dataset(config)  # (re)builds the processed dir if missing; shared by all trials for rule evaluation
     export(config, split='train')  # always re-export, so the transactions Aerial trains on match the current dataset.parquet
 
     # same evaluation settings as the GAE/RuleNaps HPO: all rules, no filtering

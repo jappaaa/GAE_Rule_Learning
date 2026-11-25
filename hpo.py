@@ -3,9 +3,9 @@ from pathlib import Path
 
 import torch
 
-from src.data.leakdb.dataset import LeakDBDataset
 from src.hpo.optimize import run_hpo
 from src.utils.config import Config
+from src.utils.dataset_factory import build_dataset
 
 
 def main():
@@ -40,11 +40,11 @@ def main():
     # Built once here and shared across all trials — no rebuild per trial needed
     # because HPO only varies model/training params, not graph construction params
     print("Building dataset...")
-    dataset = LeakDBDataset(config)
+    dataset = build_dataset(config)
     print(f"Dataset ready — {len(dataset)} graphs | {len(dataset.train_indices)} train / {len(dataset.val_indices)} val")
 
     # ----------------------------------------------------------------- run dir
-    run_dir = Path(config.results_dir) / 'hpo' / f"study_{config.hpo_study_name}"
+    run_dir = Path(config.results_dir) / 'gae' / 'hpo' / f"study_{config.hpo_study_name}"
     run_dir.mkdir(parents=True, exist_ok=True)
     print(f"Run directory: {run_dir}")
     print(f"Study: '{config.hpo_study_name}' | {config.hpo_n_trials} trials | patience={config.hpo_patience}")

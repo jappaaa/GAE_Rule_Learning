@@ -42,8 +42,8 @@ from scipy.stats import qmc
 
 from baselines.rulenaps_adapter.experiment import run_experiment
 from baselines.rulenaps_adapter.export import export
-from src.data.leakdb.dataset import LeakDBDataset
 from src.utils.config import Config
+from src.utils.dataset_factory import build_dataset
 
 # The authors' search space (tune_predefined_exp): (type, low, high, scale) or ('cat', choices)
 HP_RANGES = {
@@ -138,7 +138,7 @@ def run_hpo(config: Config, objective: str, study_name: str, n_trials: int, n_lh
             min_coverage: float | None = None) -> tuple[optuna.Study, optuna.trial.FrozenTrial | None]:
     """Create (or resume) the study, run trials until it holds n_trials finished trials, and return the best trial."""
     device = torch.device(config.device if config.device else ('cuda' if torch.cuda.is_available() else 'cpu'))
-    dataset = LeakDBDataset(config)  # (re)builds the processed dir if missing; shared by all trials for rule evaluation
+    dataset = build_dataset(config)  # (re)builds the processed dir if missing; shared by all trials for rule evaluation
     export(config, split='all')  # always re-export, so the .dat used by RuleNaps matches the current dataset.parquet
 
     # same evaluation settings as the GAE HPO (src/hpo/optimize.py): all rules, no hop distances

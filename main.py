@@ -9,7 +9,6 @@ from pathlib import Path
 import pandas as pd
 import torch
 
-from src.data.leakdb.dataset import LeakDBDataset
 from src.model.gae import GraphAutoEncoder
 from src.training.trainer import Trainer
 from src.training.masking import Masker
@@ -17,6 +16,7 @@ from src.rules.extractor import RuleExtractor
 from baselines.fp_growth.fp_extractor import FPExtractor
 from src.rules.evaluator import RuleEvaluator, annotate_hop_distances
 from src.utils.config import Config
+from src.utils.dataset_factory import build_dataset
 from src.utils.visualize import visualize_graph
 
 # Implements the context manager to time components
@@ -74,11 +74,11 @@ def main():
 
     print("Loading dataset...")
     with _timer("dataset loading", timings):
-        dataset = LeakDBDataset(config)
+        dataset = build_dataset(config)
     print(f"Dataset ready — {len(dataset)} graphs | {len(dataset.train_indices)} train / {len(dataset.val_indices)} val")
 
     timestamp = datetime.now().isoformat(timespec='seconds')
-    run_dir = Path(config.results_dir) / f"run_{timestamp.replace(':', '-')}"
+    run_dir = Path(config.results_dir) / 'gae' / f"run_{timestamp.replace(':', '-')}"
     run_dir.mkdir(parents=True, exist_ok=True)
 
     sample = dataset[0]
@@ -185,6 +185,7 @@ def main():
                     print(f"Average hop distance — min: {hop_avgs['avg_min']}  max: {hop_avgs['avg_max']}")
             _save_rules_output(evaluated_rules, averages, rules, run_dir, 'gae', config)
 
+    """
     if config.learn_rules_fp or config.evaluate_rules_fp:
         if config.learn_rules_fp:
             print("Extracting rules via FP-growth...")
@@ -242,6 +243,7 @@ def main():
                     fp_averages['avg_hop_distance_max'] = hop_avgs['avg_max']
                     print(f"Average hop distance — min: {hop_avgs['avg_min']}  max: {hop_avgs['avg_max']}")
             _save_rules_output(evaluated_fp_rules, fp_averages, fp_rules, run_dir, 'fp', config)
+    """
 
     timings['total'] = time.perf_counter() - total_start
     print("\n--- Timing summary ---")

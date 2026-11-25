@@ -25,9 +25,9 @@ import torch
 
 from baselines.rulenaps_adapter.convert import Item, parse_rulenaps_rules
 from baselines.rulenaps_adapter.export import get_output_dir
-from src.data.leakdb.dataset import LeakDBDataset
 from src.rules.evaluator import RuleEvaluator
 from src.utils.config import Config
+from src.utils.dataset_factory import build_dataset
 
 DEFAULT_STUDY_DIR = os.path.join('results', 'rulenaps', 'hpo', 'study_rulenaps_val_loss')
 DEFAULT_OUT_DIR = os.path.join('results', 'rulenaps', 'rule_format_analysis')
@@ -251,7 +251,7 @@ def main():
     with open(os.path.join(get_output_dir(config), 'items.json')) as f:
         items = [tuple(item) for item in json.load(f)]
     device = torch.device(config.device if config.device else ('cuda' if torch.cuda.is_available() else 'cpu'))
-    dataset = LeakDBDataset(config)
+    dataset = build_dataset(config)
     evaluator = RuleEvaluator(dataset, config, device, split='train')
 
     os.makedirs(args.out_dir, exist_ok=True)

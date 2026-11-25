@@ -17,6 +17,10 @@ class Config:
             self.data_dir = os.path.join("data", self.dataset_name)
         self.raw_data_dir = os.path.join(self.data_dir, "raw")
         self.processed_data_dir = os.path.join(self.data_dir, "processed")
+        # results_dir defaults to a dataset-specific subfolder (results/<dataset_name>), mirroring data_dir,
+        # so runs against different datasets never land in the same results folder; override directly if needed
+        if self.results_dir is None:
+            self.results_dir = os.path.join("results", self.dataset_name)
         # min_support_fp/min_confidence_fp default to the GAE pipeline's analogous thresholds for comparability
         # (antecedent_threshold/consequent_threshold), unless explicitly overridden
         if self.min_support_fp is None:
@@ -111,5 +115,5 @@ class Config:
     hpo_enable_pruning: bool = False # prune bad trials early using intermediate val loss
     hpo_min_coverage: float = None   # if set, trials whose rules cover less than this fraction of transactions are infeasible (Optuna constraint); currently only used by the RuleNaps HPO
 
-    # Results
-    results_dir: str = 'results'
+    # Results — defaults to results/<dataset_name>; see __post_init__
+    results_dir: str = None

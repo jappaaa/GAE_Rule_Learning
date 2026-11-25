@@ -18,9 +18,9 @@ import os
 import pandas as pd
 import torch
 
-from src.data.leakdb.dataset import LeakDBDataset
 from src.rules.evaluator import RuleEvaluator, annotate_hop_distances
 from src.utils.config import Config
+from src.utils.dataset_factory import build_dataset
 
 RULE_METRIC_COLS = ('support', 'support_ant', 'confidence', 'lift', 'zhang', 'hop_distance_min', 'hop_distance_max')
 
@@ -56,7 +56,7 @@ def evaluate_run(config: Config, run_dir: str, dataset=None, device: torch.devic
     if device is None:
         device = torch.device(config.device if config.device else ('cuda' if torch.cuda.is_available() else 'cpu'))
     if dataset is None:
-        dataset = LeakDBDataset(config)
+        dataset = build_dataset(config)
     if compute_hop_distance is None:
         compute_hop_distance = config.compute_hop_distance
 
