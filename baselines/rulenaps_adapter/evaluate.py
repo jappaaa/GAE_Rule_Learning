@@ -21,7 +21,7 @@ from src.rules.evaluator import RuleEvaluator, annotate_hop_distances
 from src.utils.config import Config
 from src.utils.dataset_factory import build_dataset
 
-RULE_METRIC_COLS = ('support', 'support_ant', 'confidence', 'lift', 'zhang', 'hop_distance_min', 'hop_distance_max')
+RULE_METRIC_COLS = ('support', 'support_ant', 'confidence', 'lift', 'zhang', 'confidence_zhang', 'hop_distance_min', 'hop_distance_max')
 
 
 def load_rules(run_dir: str) -> list[dict]:

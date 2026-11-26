@@ -33,7 +33,7 @@ def _save_rules_output(evaluated_rules, averages, all_rules, run_dir, tag, confi
     rows = []
     for r in evaluated_rules:
         row = {'antecedent': str(r['antecedent']), 'consequent': str(r['consequent'])}
-        for k in ('support', 'support_ant', 'confidence', 'lift', 'zhang', 'hop_distance_min', 'hop_distance_max'):
+        for k in ('support', 'support_ant', 'confidence', 'lift', 'zhang', 'confidence_zhang', 'hop_distance_min', 'hop_distance_max'):
             if k in r:
                 row[k] = r[k]
         rows.append(row)
