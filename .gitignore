@@ -27,6 +27,7 @@ old_results/
 /rules/
 visualizations/
 lib/
+results_scratch/
 
 # Vendored baseline repos — copied without .git/license, not ours to publish (see SOURCE.md)
 baselines/rulenaps/

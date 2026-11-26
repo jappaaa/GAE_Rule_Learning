@@ -1,4 +1,4 @@
-import time
+from timeit import default_timer as timer
 
 import pandas as pd
 from mlxtend.frequent_patterns import fpgrowth, association_rules
@@ -20,7 +20,15 @@ class FPExtractor:
         self.dataset = dataset
         self.config = config
 
-    def extract(self) -> list[dict]:
+    def extract(self) -> tuple[list[dict], dict]:
+        """Mine rules and return (rules, timings).
+
+        runtime_total_s is mining + rule generation only, matching train_aerial.py's runtime_total_s =
+        training + rule extraction: the core algorithm cost. runtime_setup_s (building the boolean
+        transaction frame) and runtime_filtering_s (enforcing the project's rule-format constraints) are
+        tracked separately since neither is part of the algorithm itself -- GAE/Aerial need no equivalent
+        of either, their generation already produces constraint-satisfying rules directly.
+        """
         items = self.dataset.items  # list of (st, sname, bin_idx)
 
         # mine from the train split only, matching every other method (GAE/RuleNaps/Aerial train only on
@@ -35,20 +43,29 @@ class FPExtractor:
         item_cols = [c for c in self.dataset.df.columns if ';' in c]
         bool_df = train_df[item_cols].astype(bool)
 
-        print(f"  Mining frequent itemsets (min_support={self.config.min_support_fp}, max_len={self.config.max_antecedent_size + 1})...")
-        t0 = time.time()
+        print(f"  Mining frequent itemsets (min_support={self.config.min_support_fp}, max_len={self.config.max_antecedent_size + 1})...")   # max antecedents + 1 to also accomodate the consequent
+        t0 = timer()
         freq_sets = fpgrowth(bool_df, min_support=self.config.min_support_fp, use_colnames=True, max_len=self.config.max_antecedent_size + 1)
-        print(f"  Found {len(freq_sets)} frequent itemsets in {time.time() - t0:.1f}s")
+        mining_time = timer() - t0
+        print(f"  Found {len(freq_sets)} frequent itemsets in {mining_time:.1f}s")
 
         if freq_sets.empty:
-            return []
+            timings = {
+                'runtime_mining_s': round(mining_time, 1),
+                'runtime_rule_generation_s': 0.0,
+                'runtime_filtering_s': 0.0,
+                'runtime_total_s': round(mining_time, 1),
+            }
+            return [], timings
 
         print(f"  Generating association rules (min_confidence={self.config.min_confidence_fp})...")
-        t0 = time.time()
+        t0 = timer()
         raw_rules = association_rules(freq_sets, metric='confidence', min_threshold=self.config.min_confidence_fp, num_itemsets=len(freq_sets))
-        print(f"  Generated {len(raw_rules)} raw rules in {time.time() - t0:.1f}s")
+        rule_generation_time = timer() - t0
+        print(f"  Generated {len(raw_rules)} raw rules in {rule_generation_time:.1f}s")
 
         print("  Filtering and converting rules...")
+        t0 = timer()
         # map column names back to item tuples -- computed once, not per rule row (this used to be
         # rebuilt from scratch inside the loop below, which was tolerable at LeakDB's 980 items but
         # became an O(n_rules * n_items) bottleneck at DiTEC-WDN's 24254, hanging for tens of minutes)
@@ -87,4 +104,11 @@ class FPExtractor:
 
             rules.append({'antecedent': antecedent, 'consequent': consequent})
 
-        return rules
+        filtering_time = timer() - t0
+        timings = {
+            'runtime_mining_s': round(mining_time, 1),
+            'runtime_rule_generation_s': round(rule_generation_time, 1),
+            'runtime_filtering_s': round(filtering_time, 1),
+            'runtime_total_s': round(mining_time + rule_generation_time, 1),
+        }
+        return rules, timings
