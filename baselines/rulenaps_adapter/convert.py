@@ -20,6 +20,7 @@ import json
 import os
 import re
 from collections import Counter
+from timeit import default_timer as timer
 
 from baselines.rulenaps_adapter.export import get_output_dir
 from src.utils.config import Config
@@ -86,7 +87,9 @@ def convert_run(config: Config, run_dir: str, max_antecedent_size: int | None) -
     with open(os.path.join(get_output_dir(config), 'items.json')) as f:
         items = [tuple(item) for item in json.load(f)]
 
+    t0 = timer()
     rules, stats = convert(parse_rulenaps_rules(summary['rules_file']), items, max_antecedent_size)
+    stats['runtime_filtering_s'] = round(timer() - t0, 1)
     stats['max_antecedent_size'] = max_antecedent_size
 
     with open(os.path.join(run_dir, 'rules.json'), 'w') as f:
